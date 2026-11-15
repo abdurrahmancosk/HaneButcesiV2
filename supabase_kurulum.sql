@@ -62,6 +62,7 @@ create table if not exists public.hb_islemler (
   ekleyen_ad   text,
   fis_grup     uuid,                                               -- aynı fişten gelen satırlar
   fis_gorsel   text,                                               -- storage yolu
+  eski_id      bigint unique,                                     -- eski uygulamadan aktarılan kaydın no'su
   olusturma    timestamptz not null default now(),
   guncelleme   timestamptz not null default now(),
   constraint hb_aktarim_hedef check ((tur = 'Aktarım') = (hedef_kasa is not null))
@@ -76,8 +77,10 @@ create or replace function public.hb_islem_oncesi()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
   if tg_op = 'INSERT' then
-    new.ekleyen := auth.uid();
-    new.ekleyen_ad := (select ad from public.hb_profiller where id = auth.uid());
+    if auth.uid() is not null then
+      new.ekleyen := auth.uid();
+    end if;
+    new.ekleyen_ad := (select ad from public.hb_profiller where id = new.ekleyen);
   else
     new.ekleyen := old.ekleyen;
     new.ekleyen_ad := old.ekleyen_ad;
