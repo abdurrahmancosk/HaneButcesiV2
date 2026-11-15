@@ -403,6 +403,12 @@ class Supabase:
         return self._istek("PATCH", f"/rest/v1/{ad}?id=eq.{int(kayit_id)}", govde=alanlar,
                            basliklar={"Prefer": "return=representation"})
 
+    def tablo_guncelle_filtre(self, ad: str, filtre: str, alanlar: dict):
+        return self._istek("PATCH", f"/rest/v1/{ad}?{filtre}", govde=alanlar, basliklar={"Prefer": "return=minimal"})
+
+    def tablo_sil_filtre(self, ad: str, filtre: str):
+        return self._istek("DELETE", f"/rest/v1/{ad}?{filtre}")
+
     def tablo_sil(self, ad: str, kayit_id):
         return self._istek("DELETE", f"/rest/v1/{ad}?id=eq.{int(kayit_id)}")
 
@@ -445,7 +451,8 @@ class CanliBaglanti:
         self.bagli = False
         self._calisiyor = False
         self._ref = 0
-        self.tablolar = ["hb_islemler", "hb_alisveris", "hb_faturalar", "hb_duzenli", "hb_borclar", "hb_hedefler"]
+        self.tablolar = ["hb_islemler", "hb_alisveris", "hb_faturalar", "hb_duzenli", "hb_borclar", "hb_hedefler",
+                         "hb_bildirimler"]
 
     def _sonraki_ref(self) -> str:
         self._ref += 1

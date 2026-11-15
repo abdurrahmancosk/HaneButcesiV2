@@ -12,17 +12,18 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.2.0"
+SURUM = "2.3.0"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler
+from hb_ek2 import EkOzellikler2
 from hb_ui import (ANA, GELIR, GIDER, AKTARIM, _param_var, buton, acilir, kart, yazi, KATEGORI_STIL, GUNLER, AYLAR_UZUN, ikon, kat_stil, saydam, golge, degrade, ORTA, simge_kutusu, cip, gun_basligi, fis_anahtari, grupla)
 
 
 # ---------------------------------------------------------------------------
 # Uygulama
 # ---------------------------------------------------------------------------
-class Uygulama(EkOzellikler):
+class Uygulama(EkOzellikler, EkOzellikler2):
     def __init__(self, page: ft.Page):
         self.page = page
         self.supa = hb.Supabase()
@@ -49,6 +50,7 @@ class Uygulama(EkOzellikler):
         p = str(getattr(page, "platform", "") or "").lower()
         self.mobil = "android" in p or "ios" in p
         self.ek_varsayilan()
+        self.ek2_kur()
         self.tema_ayarla(bool(self._yerel_ayar().get("koyu")))
 
         page.title = "Hane Bütçesi"
@@ -129,7 +131,7 @@ class Uygulama(EkOzellikler):
         self.guncelle()
         if await self.arka(self.supa.kayitli_oturumu_ac):
             try:
-                if self._yerel_ayar().get("pin"):
+                if self._yerel_ayar().get("pin") or (self._yerel_ayar().get("biyometrik") and self.yerel_kimlik is not None):
                     self.pin_ekrani(self.oturum_basla)
                 else:
                     await self.oturum_basla()
@@ -286,9 +288,7 @@ class Uygulama(EkOzellikler):
         await self.verileri_yenile(ciz=False)
         self.ekrani_ciz()
 
-        h = self.hatirlatmalar()
-        if h:
-            self.bildir("🔔 " + h[0]["metin"] + (f" (+{len(h) - 1} hatırlatma)" if len(h) > 1 else ""), GIDER)
+        self.page.run_task(self.bildirim_acilis)
         self.canli = hb.CanliBaglanti(self.supa, self.canli_degisiklik, self.canli_durum)
         self.page.run_task(self.canli.calistir)
         self._nesil += 1
@@ -319,8 +319,9 @@ class Uygulama(EkOzellikler):
     async def verileri_yenile(self, ciz=True):
         bas, bit = self.donem
         try:
-            self.islemler, self.bakiyeler, _ = await asyncio.gather(
-                self.arka(self.supa.islemler, bas, bit), self.arka(self.supa.bakiyeler), self.ek_verileri_yenile())
+            self.islemler, self.bakiyeler, _, _ = await asyncio.gather(
+                self.arka(self.supa.islemler, bas, bit), self.arka(self.supa.bakiyeler), self.ek_verileri_yenile(),
+                self.bildirimleri_yukle())
         except Exception as e:
             print("Veri yenileme hatası:", e)
             if ciz:
@@ -332,7 +333,13 @@ class Uygulama(EkOzellikler):
     async def canli_degisiklik(self, veri: dict):
         kayit = veri.get("record") or {}
         tablo = veri.get("table") or "hb_islemler"
+        if tablo == "hb_bildirimler":
+            if veri.get("type") == "INSERT":
+                await self.yeni_bildirim(kayit)
+            return
         baskasi = veri.get("type") == "INSERT" and kayit.get("ekleyen") and kayit.get("ekleyen") != self.ben["id"]
+        if self.bildirim_tablosu:
+            baskasi = False  # bildirimler artık sunucudan, ayrı kanaldan geliyor
         if baskasi and tablo == "hb_alisveris":
             self.bildir(f"🛒 {kayit.get('ekleyen_ad') or 'Eşiniz'} listeye ekledi: {kayit.get('urun')}")
         elif baskasi and tablo == "hb_faturalar":
@@ -474,7 +481,8 @@ class Uygulama(EkOzellikler):
             ft.Container(content=ft.Row([ft.Icon(ft.Icons.CIRCLE, size=9, color=GELIR if canli else "#94a3b8"),
                                          yazi("Canlı" if canli else "Bağlanıyor", 11, renk=ui.SOLUK)], spacing=5, tight=True),
                          bgcolor=ui.KART, padding=ft.Padding(10, 6, 10, 6), border_radius=20, shadow=golge(0.4)),
-        ])
+            self.zil_dugmesi(),
+        ], spacing=8)
 
         # --- Kasa kartı ---
         if self.yonetici:
@@ -1519,12 +1527,15 @@ class Uygulama(EkOzellikler):
         async def cikis(e):
             if self.canli:
                 self.canli.durdur()
+            await self.push_cikis()
             await self.arka(self.supa.cikis)
             self.ben, self.islemler, self.bakiyeler, self.fis = None, [], [], None
             self.ek_varsayilan()
             self.giris_ekrani()
 
         kontroller.insert(1, self.tema_pin_karti())
+        if self.yonetici:
+            kontroller.insert(2, self.push_ayar_karti())
         kontroller += [buton("Verileri yenile", yenile, ft.Icons.REFRESH, tip="outlined"),
                        buton("Çıkış yap", cikis, ft.Icons.LOGOUT, tip="outlined"),
                        ft.Row([yazi(f"Hane Bütçesi {SURUM}", 11, renk=ui.SOLUK)], alignment=ft.MainAxisAlignment.CENTER)]

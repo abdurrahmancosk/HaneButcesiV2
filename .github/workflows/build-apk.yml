@@ -45,7 +45,7 @@ jobs:
             --project "hanebutcesi2" \
             --product "Hane Bütçesi" \
             --org "com.evbutcesi" \
-            --android-permissions android.permission.INTERNET=true android.permission.CAMERA=true
+            --android-permissions android.permission.INTERNET=true android.permission.CAMERA=true android.permission.RECORD_AUDIO=true android.permission.POST_NOTIFICATIONS=true
 
       - name: APK dosyasini hazirla
         run: |

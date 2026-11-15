@@ -1,5 +1,8 @@
 flet
 flet-camera
+flet-audio-recorder
+flet-local-auth
+flet-onesignal
 websockets
 certifi
 pillow

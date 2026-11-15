@@ -46,3 +46,16 @@ Supabase'de bir kez **`guncelleme_3.sql`** çalıştırın (yeni tablolar). Sonr
 - **Akıllı rapor:** Önceki dönemle kategori karşılaştırması, yapay zeka yorumu ve tasarruf önerileri, Excel/PDF indirme.
 - **Asistan:** “Bu ay sigaraya ne kadar verdik?” gibi sorular.
 - **Karanlık tema** ve **PIN kilidi** (Menü > Ayarlar).
+
+## Sürüm 2.3 – bildirimler, sesli ekleme, parmak izi
+Supabase'de bir kez **`guncelleme_4.sql`** çalıştırın, sonra `GitHub_Yukle.bat`.
+
+- **Uygulama içi bildirimler (zil simgesi):** Eşinizin eklediği gider/gelir, fiş, fatura ve alışveriş listesi maddeleri ile her sabah 09:00'da fatura/düzenli ödeme hatırlatmaları. Her bildirim **bir kez** üretilir; okununca/temizlenince bir daha gelmez. Hatice, sizin gizli işaretlediğiniz ya da sizin kasanıza ait kayıtlar için bildirim almaz.
+- **Uygulama kapalıyken telefona bildirim (OneSignal, ücretsiz):**
+  1. https://onesignal.com → ücretsiz hesap → *New App* → ad: Hane Bütçesi → platform: **Google Android (FCM)**.
+  2. OneSignal sizden Firebase dosyası ister: https://console.firebase.google.com → *Proje oluştur* → ⚙️ *Proje ayarları* → *Hizmet hesapları* → **Yeni özel anahtar oluştur** → inen JSON dosyasını OneSignal'e yükleyin.
+  3. OneSignal → *Settings → Keys & IDs*: **App ID**'yi kopyalayın, **Add Key** ile bir **App API Key** oluşturup kopyalayın.
+  4. Uygulamada Abdurrahman ile: **Menü → Ayarlar → Telefon bildirimleri** → ikisini yapıştırıp *Kaydet*.
+  5. Uygulamayı iki telefonda da kapatıp açın, bildirim iznini verin.
+- **Sesli ekleme:** Özet'teki hızlı ekleme kutusunda 🎙️ → "Migros'tan iki süt seksen lira" deyin → tekrar dokunun → onaylayın. Asistan ekranında da sesli soru sorabilirsiniz. (Telefonda; ilk kullanımda mikrofon izni ister.)
+- **Parmak izi:** Menü → Ayarlar → *Parmak izi / yüz tanıma ile kilit*. PIN ile birlikte de kullanılabilir.

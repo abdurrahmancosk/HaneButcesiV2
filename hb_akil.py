@@ -202,6 +202,33 @@ Kurallar: "dün", "sabah" gibi ifadeleri tarihe çevir; tarih belirtilmemişse �
     return sonuc
 
 
+def hizli_ekle_ses(ses: bytes, mime: str, kategoriler: list[str], gelir_turleri: list[str], api_anahtari: str) -> tuple[str, list[dict]]:
+    """Ses kaydını dinleyip (çözümlenen metin, kayıtlar) döndürür."""
+    j = gemini(f"""Bu Türkçe bir ses kaydı. Önce söyleneni aynen yazıya dök, sonra içindeki harcama/gelirleri çıkar.
+YALNIZCA JSON: {{"metin": "duyduğun cümle", "kayitlar": [{{"tur": "Gider|Gelir", "tutar": 45.0, "firma": "", "urun": "",
+"miktar": "", "kategori": "listeden biri", "tarih": "GG.AA.YYYY SS:DD"}}]}}
+Bugün: {hb.simdi():%d.%m.%Y %A %H:%M}. Gider kategorileri: {json.dumps(kategoriler, ensure_ascii=False)}
+Gelir türleri: {json.dumps(gelir_turleri, ensure_ascii=False)}. Tutarı olmayan kalemi yazma.""", api_anahtari, ses, mime)
+    metin = (j.get("metin") or "").strip() if isinstance(j, dict) else ""
+    sonuc = []
+    for k in (j.get("kayitlar") if isinstance(j, dict) else []) or []:
+        t = hb.tutar_coz(k.get("tutar"))
+        if not t:
+            continue
+        tur = "Gelir" if k.get("tur") == "Gelir" else "Gider"
+        liste = gelir_turleri if tur == "Gelir" else kategoriler
+        kat = k.get("kategori") if k.get("kategori") in liste else ("Diğer" if tur == "Gider" else liste[-1])
+        sonuc.append({"tur": tur, "tutar": abs(t), "firma": (k.get("firma") or "").strip() or None,
+                      "urun": (k.get("urun") or "").strip() or None, "miktar": (k.get("miktar") or "").strip() or None,
+                      "kategori": kat, "tarih": hb.tarih_coz(k.get("tarih")) if k.get("tarih") else hb.simdi()})
+    return metin, sonuc
+
+
+def sesi_yaziya_dok(ses: bytes, mime: str, api_anahtari: str) -> str:
+    return gemini("Bu Türkçe ses kaydında söyleneni noktalama ile aynen yazıya dök. Sadece metni yaz.", api_anahtari, ses,
+                  mime, json_mod=False).strip()
+
+
 # ----------------------------------------------------------------------------
 # Soru-cevap ve dönem yorumu
 # ----------------------------------------------------------------------------

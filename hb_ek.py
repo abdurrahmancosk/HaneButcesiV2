@@ -23,6 +23,7 @@ FATURA_SIMGE = {"Elektrik": ("BOLT", "#f59e0b"), "Su": ("WATER_DROP", "#0ea5e9")
                 "Kira": ("HOME", "#0f766e"), "Diğer": ("RECEIPT_LONG", "#64748b")}
 
 MENU = [  # anahtar, başlık, açıklama, simge, renk
+    ("bildirimler", "Bildirimler", "Eşinizin eklediği kayıtlar, hatırlatmalar", "NOTIFICATIONS_ROUNDED", "#e11d48"),
     ("faturalar", "Faturalar", "Yükle, hatırlat, zam/kullanım analizi", "RECEIPT_LONG_ROUNDED", "#f59e0b"),
     ("alisveris", "Alışveriş listesi", "Ortak, anlık liste", "CHECKLIST_ROUNDED", "#16a34a"),
     ("butceler", "Bütçe limitleri", "Kategori sınırları ve uyarılar", "DONUT_LARGE_ROUNDED", "#e11d48"),
@@ -157,9 +158,9 @@ class EkOzellikler:
         alan.on_submit = gonder
         return ft.Container(content=ft.Row([
             ft.Icon(ft.Icons.AUTO_AWESOME_ROUNDED, color="#7c3aed", size=20), alan, bekle,
+            self.ses_dugmesi(self.sesli_hizli_ekle, "Sesli ekle: “bimden 3 ekmek 45 lira”"),
             ft.IconButton(icon=ft.Icons.SEND_ROUNDED, icon_color="#7c3aed", on_click=gonder, tooltip="Ekle")], spacing=6),
-            bgcolor=ui.KART, border_radius=18, padding=ft.Padding(14, 2, 4, 2), shadow=golge(0.5),
-            tooltip="Klavyedeki mikrofonla sesli de yazabilirsiniz")
+            bgcolor=ui.KART, border_radius=18, padding=ft.Padding(14, 2, 4, 2), shadow=golge(0.5))
 
     def hizli_onay(self, kayitlar):
         secili = [True] * len(kayitlar)
@@ -227,7 +228,7 @@ class EkOzellikler:
         if self.ek_hazir is False:
             uyari = [kart(yazi("⚠️ Yeni özellikler için Supabase'de 'guncelleme_3.sql' dosyasını bir kez çalıştırın.",
                                12.5, renk=GIDER), renk=ui.UYARI_ZEMIN)]
-        rozet = {"faturalar": len(self.hatirlatmalar()) or None,
+        rozet = {"bildirimler": self.okunmamis or None, "faturalar": len(self.hatirlatmalar()) or None,
                  "alisveris": sum(1 for a in self.ek["alisveris"] if not a.get("alindi")) or None,
                  "borclar": sum(1 for b in self.ek["borclar"] if not b.get("kapandi")) or None,
                  "butceler": sum(1 for b in self.butce_durumu() if b[3] >= 1) or None}
@@ -975,7 +976,7 @@ class EkOzellikler:
     # ================================================================== asistan
     def sayfa_asistan(self):
         mesajlar = ft.Column(spacing=10)
-        alan = ft.TextField(hint_text="Sorunuzu yazın… (klavyedeki mikrofonla sesli de sorabilirsiniz)", expand=True,
+        alan = ft.TextField(hint_text="Sorunuzu yazın ya da 🎙️ ile sorun…", expand=True,
                             multiline=True, min_lines=1, max_lines=3, dense=True, border_color="transparent")
 
         def balon(m):
@@ -1023,10 +1024,22 @@ class EkOzellikler:
             await sor()
 
         alan.on_submit = gonder
+
+        async def sesli_soru(veri, mime):
+            self.bildir("🎧 Dinleniyor…")
+            try:
+                metin = await self.arka(ak.sesi_yaziya_dok, veri, mime, self.gemini_anahtari)
+            except Exception as ex:
+                self.bildir(f"Anlaşılamadı: {ex}", GIDER)
+                return
+            if metin:
+                await sor(metin)
+
         ciz()
         return ft.Column([
             ft.Container(content=ft.ListView(controls=[mesajlar], padding=16, auto_scroll=True), expand=True),
-            ft.Container(content=ft.Row([alan, ft.IconButton(icon=ft.Icons.SEND_ROUNDED, icon_color=ANA, on_click=gonder)]),
+            ft.Container(content=ft.Row([alan, self.ses_dugmesi(sesli_soru, "Sesli sor"),
+                                         ft.IconButton(icon=ft.Icons.SEND_ROUNDED, icon_color=ANA, on_click=gonder)]),
                          bgcolor=ui.KART, border_radius=20, padding=ft.Padding(14, 2, 4, 2), margin=ft.Margin(12, 0, 12, 12)
                          if hasattr(ft, "Margin") else None, shadow=golge(0.6))], expand=True, spacing=0)
 
@@ -1146,22 +1159,44 @@ class EkOzellikler:
             self.guncelle()
 
         async def unuttum(e):
-            self._yerel_ayar_yaz(pin=None)
+            self._yerel_ayar_yaz(pin=None, biyometrik=False)
             await self.arka(self.supa.cikis)
-            self.giris_ekrani("PIN sıfırlandı. Şifrenizle giriş yapın.")
+            self.giris_ekrani("Kilit sıfırlandı. Şifrenizle giriş yapın.")
+
+        ayar = self._yerel_ayar()
+        pin_var, parmak = bool(ayar.get("pin")), bool(ayar.get("biyometrik"))
+
+        async def parmak_izi(e=None):
+            if await self.biyometrik_dogrula():
+                await devam()
+            elif not pin_var:
+                hata.value = "Doğrulanamadı. Tekrar deneyin."
+                self.guncelle()
 
         tus = lambda r: ft.Container(content=yazi("⌫" if r == "sil" else r, 24, True), width=72, height=72, border_radius=36,
                                      bgcolor=ui.KART, alignment=ORTA, shadow=golge(0.4),
                                      on_click=lambda e: self.page.run_task(bas, r))
+        parmak_tus = ft.Container(content=ft.Icon(ft.Icons.FINGERPRINT_ROUNDED, size=34, color=ANA), width=72, height=72,
+                                  border_radius=36, bgcolor=ui.KART, alignment=ORTA, shadow=golge(0.4),
+                                  on_click=lambda e: self.page.run_task(parmak_izi))
         ciz_nokta()
-        self.govde.content = ft.Column([
-            ft.Container(height=40), ft.Icon(ft.Icons.LOCK_ROUNDED, size=48, color=ANA), yazi("PIN girin", 20, True), noktalar, hata,
-            *[ft.Row([tus(r) for r in sira], alignment=ft.MainAxisAlignment.CENTER, spacing=18)
-              for sira in (("1", "2", "3"), ("4", "5", "6"), ("7", "8", "9"))],
-            ft.Row([ft.Container(width=72), tus("0"), tus("sil")], alignment=ft.MainAxisAlignment.CENTER, spacing=18),
-            buton("PIN'imi unuttum", unuttum, tip="text")],
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=14, expand=True, scroll=ft.ScrollMode.AUTO)
+        govde = [ft.Container(height=40),
+                 ft.Icon(ft.Icons.FINGERPRINT_ROUNDED if parmak and not pin_var else ft.Icons.LOCK_ROUNDED, size=56, color=ANA),
+                 yazi("PIN girin" if pin_var else "Kilidi açın", 20, True)]
+        if pin_var:
+            govde += [noktalar, hata,
+                      *[ft.Row([tus(r) for r in sira], alignment=ft.MainAxisAlignment.CENTER, spacing=18)
+                        for sira in (("1", "2", "3"), ("4", "5", "6"), ("7", "8", "9"))],
+                      ft.Row([parmak_tus if parmak else ft.Container(width=72), tus("0"), tus("sil")],
+                             alignment=ft.MainAxisAlignment.CENTER, spacing=18)]
+        else:
+            govde += [hata, parmak_tus, yazi("Parmak izi / yüz / ekran kilidi ile", 12, renk=ui.SOLUK)]
+        govde.append(buton("Kilidi açamıyorum", unuttum, tip="text"))
+        self.govde.content = ft.Column(govde, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=14, expand=True,
+                                       scroll=ft.ScrollMode.AUTO)
         self.guncelle()
+        if parmak:
+            self.page.run_task(parmak_izi)
 
     def tema_pin_karti(self):
         a = self._yerel_ayar()
@@ -1191,8 +1226,21 @@ class EkOzellikler:
             self.ekrani_ciz()
 
         sw = ft.Switch(label="Karanlık tema", value=bool(a.get("koyu")), on_change=tema_degisti)
+
+        async def parmak_degisti(e):
+            acik = bool(e.control.value)
+            if acik and not await self.biyometrik_dogrula():
+                e.control.value = False
+                self.bildir("Doğrulama yapılamadı; telefonda parmak izi/ekran kilidi tanımlı mı?", GIDER)
+                self.guncelle()
+                return
+            self._yerel_ayar_yaz(biyometrik=acik)
+            self.bildir("Parmak izi kilidi " + ("açıldı ✓" if acik else "kapatıldı"), GELIR if acik else None)
+
+        parmak_sw = ft.Switch(label="Parmak izi / yüz tanıma ile kilit", value=bool(a.get("biyometrik")),
+                              on_change=parmak_degisti, visible=self.mobil and self.yerel_kimlik is not None)
         return kart(ft.Column([
-            yazi("Görünüm ve güvenlik", 14, True), sw,
+            yazi("Görünüm ve güvenlik", 14, True), sw, parmak_sw,
             yazi("PIN kilidi: uygulama her açıldığında 4 haneli PIN sorar (bu cihaza özel).", 11.5, renk=ui.SOLUK),
             ft.Row([ft.Container(content=pin1, expand=True), buton("Kaydet", pin_kaydet, tip="tonal")]),
             *([buton("PIN kilidini kapat", pin_kaldir, ft.Icons.LOCK_OPEN_ROUNDED, tip="text")] if a.get("pin") else [])],
