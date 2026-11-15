@@ -391,6 +391,31 @@ class Supabase:
         return self._istek("POST", "/rest/v1/hb_kategori_eslemeleri?on_conflict=urun_anahtar", govde=govde,
                            basliklar={"Prefer": "resolution=merge-duplicates,return=minimal"})
 
+    # ---- genel tablo yardımcıları ----
+    def tablo(self, ad: str, sorgu: str = "select=*") -> list[dict]:
+        return self._istek("GET", f"/rest/v1/{ad}?{sorgu}") or []
+
+    def tablo_ekle(self, ad: str, kayit: dict | list) -> list[dict]:
+        return self._istek("POST", f"/rest/v1/{ad}", govde=kayit if isinstance(kayit, list) else [kayit],
+                           basliklar={"Prefer": "return=representation"}) or []
+
+    def tablo_guncelle(self, ad: str, kayit_id, alanlar: dict):
+        return self._istek("PATCH", f"/rest/v1/{ad}?id=eq.{int(kayit_id)}", govde=alanlar,
+                           basliklar={"Prefer": "return=representation"})
+
+    def tablo_sil(self, ad: str, kayit_id):
+        return self._istek("DELETE", f"/rest/v1/{ad}?id=eq.{int(kayit_id)}")
+
+    def butce_yaz(self, kategori: str, limit_tutar: float | None):
+        if limit_tutar:
+            return self._istek("POST", "/rest/v1/hb_butceler?on_conflict=kategori",
+                               govde=[{"kategori": kategori, "limit_tutar": limit_tutar, "guncelleme": iso_tarih(simdi())}],
+                               basliklar={"Prefer": "resolution=merge-duplicates,return=minimal"})
+        return self._istek("DELETE", f"/rest/v1/hb_butceler?kategori=eq.{urllib.parse.quote(kategori)}")
+
+    def rpc(self, ad: str, govde: dict | None = None):
+        return self._istek("POST", f"/rest/v1/rpc/{ad}", govde=govde or {}) or []
+
     # ---- storage ----
     def fis_yukle(self, veri: bytes, uzanti: str = "jpg", mime: str = "image/jpeg") -> str:
         yol = f"{self.kullanici_id}/{simdi():%Y%m}/{uuid.uuid4().hex}.{uzanti}"
@@ -420,6 +445,7 @@ class CanliBaglanti:
         self.bagli = False
         self._calisiyor = False
         self._ref = 0
+        self.tablolar = ["hb_islemler", "hb_alisveris", "hb_faturalar", "hb_duzenli", "hb_borclar", "hb_hedefler"]
 
     def _sonraki_ref(self) -> str:
         self._ref += 1
@@ -458,7 +484,8 @@ class CanliBaglanti:
                             "config": {
                                 "broadcast": {"ack": False, "self": False},
                                 "presence": {"key": ""},
-                                "postgres_changes": [{"event": "*", "schema": "public", "table": "hb_islemler"}],
+                                "postgres_changes": [{"event": "*", "schema": "public", "table": t}
+                                                     for t in self.tablolar],
                                 "private": False,
                             },
                             "access_token": token,
@@ -491,6 +518,12 @@ class CanliBaglanti:
                             olay = m.get("event")
                             if olay == "phx_reply" and m.get("ref") == katil:
                                 ok = (m.get("payload") or {}).get("status") == "ok"
+                                if not ok and len(self.tablolar) > 1:
+                                    # yeni tablolar henüz kurulmamış olabilir: yalnızca işlemlerle devam et
+                                    print("Realtime: tablolar kurulmamış, sadece hb_islemler dinlenecek")
+                                    self.tablolar = ["hb_islemler"]
+                                    bekleme = 0
+                                    break
                                 await self._durum(ok)
                                 bekleme = 2
                             elif olay == "postgres_changes":
@@ -506,7 +539,7 @@ class CanliBaglanti:
             await self._durum(False)
             if self._calisiyor:
                 await asyncio.sleep(bekleme)
-                bekleme = min(bekleme * 2, 60)
+                bekleme = min(max(bekleme, 1) * 2, 60)
 
 
 # ----------------------------------------------------------------------------
@@ -525,10 +558,10 @@ def gorseli_hazirla(veri: bytes) -> tuple[bytes, str]:
         im = ImageOps.exif_transpose(im)
         if im.mode not in ("RGB", "L"):
             im = im.convert("RGB")
-        en_buyuk = 1600
-        if max(im.size) > en_buyuk:
-            o = en_buyuk / max(im.size)
-            im = im.resize((int(im.size[0] * o), int(im.size[1] * o)))
+        # Genişlik 1600'e, (çok sayfalı uzun fişler için) yükseklik 8000'e kadar
+        o = min(1.0, 1600 / im.size[0], 8000 / im.size[1])
+        if o < 1.0:
+            im = im.resize((max(1, int(im.size[0] * o)), max(1, int(im.size[1] * o))))
         tampon = io.BytesIO()
         im.save(tampon, format="JPEG", quality=85, optimize=True)
         return tampon.getvalue(), "image/jpeg"
@@ -539,6 +572,32 @@ def gorseli_hazirla(veri: bytes) -> tuple[bytes, str]:
         if veri[:8] == b"\x89PNG\r\n\x1a\n":
             return veri, "image/png"
         return veri, "image/jpeg"
+
+
+def gorselleri_birlestir(gorseller: list[bytes]) -> bytes:
+    """Uzun fişin birden çok fotoğrafını alt alta tek görsele birleştirir."""
+    if len(gorseller) == 1:
+        return gorseller[0]
+    try:
+        from PIL import Image, ImageOps
+        resimler = []
+        for g in gorseller:
+            im = ImageOps.exif_transpose(Image.open(io.BytesIO(g)))
+            resimler.append(im.convert("RGB"))
+        genislik = min(1600, max(im.size[0] for im in resimler))
+        olcekli = [im.resize((genislik, max(1, int(im.size[1] * genislik / im.size[0])))) for im in resimler]
+        bosluk = 12
+        tuval = Image.new("RGB", (genislik, sum(im.size[1] for im in olcekli) + bosluk * (len(olcekli) - 1)), "white")
+        y = 0
+        for im in olcekli:
+            tuval.paste(im, (0, y))
+            y += im.size[1] + bosluk
+        tampon = io.BytesIO()
+        tuval.save(tampon, format="JPEG", quality=88)
+        return tampon.getvalue()
+    except Exception as e:
+        print("Görseller birleştirilemedi, ilk sayfa kullanılacak:", e)
+        return gorseller[0]
 
 
 def gemini_modelleri(api_anahtari: str) -> list[str]:
@@ -582,6 +641,7 @@ JSON yapısı:
 }}
 KATEGORİ LİSTESİ (yalnızca bunlardan birini seç): {json.dumps(kategoriler, ensure_ascii=False)}
 KURALLAR:
+- Görsel birden çok fotoğrafın alt alta birleşimi olabilir (uzun fiş); aynı fişin devamı olarak oku, tekrar eden satırları iki kez yazma.
 - Alışveriş poşetleri kesinlikle 'Poşet'.
 - Çikolata, gofret, bisküvi, kek, cips, dondurma, şekerleme, kuruyemiş, gazlı içecek: 'Abur Cubur & Atıştırmalık'.
 - Ekmek, süt, yoğurt, peynir, yumurta, yağ, bakliyat, et, tavuk, sebze, meyve, makarna, çay: 'Market & Temel Gıda'.

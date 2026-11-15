@@ -33,3 +33,16 @@ Abdurrahman ile girin → **Ayarlar** → Gemini API anahtarını kaydedin (tek 
 - **Aktarım:** bir kasadan diğerine para verme; toplam kasa değişmez.
 - **Fiş:** fotoğraf/PDF seçilir → görsel buluta yüklenir → Gemini ürünleri, fiyatları, kategorileri çıkarır → siz düzeltip kaydedersiniz. Değiştirdiğiniz kategoriler öğrenilir, bir dahakine otomatik uygulanır.
 - **Anlık senkron:** biri kayıt eklediğinde diğer telefon ~1 sn içinde güncellenir ve “🔔 Hatice: …” bildirimi görünür.
+
+## Sürüm 2.2 – yeni özellikler
+Supabase'de bir kez **`guncelleme_3.sql`** çalıştırın (yeni tablolar). Sonra `GitHub_Yukle.bat`.
+
+- **Kamera:** Fiş ve faturayı uygulama içinden çekin; uzun fişleri birkaç parça halinde çekince tek görsele birleştirilir. Flaş, galeriden seçme.
+- **Faturalar:** Fatura fotoğrafı/PDF'i yüklenince tür, kurum, tüketim, tutar, son ödeme tarihi okunur. Önceki faturayla karşılaştırılıp “zam mı, kullanım mı” söylenir. Son ödemeden 1 gün önce ve gününde uyarı (uygulama açıkken / açılışta). “Ödendi” deyince kasadan düşer.
+- **Düzenli ödemeler:** Kira, aidat vb.; günü gelince hatırlatır, “Öde” deyince kasadan düşer, zam gelince tutar güncellenir.
+- **Bütçe limitleri**, **birikim hedefleri**, **borç/alacak**, **ortak alışveriş listesi** (fiş kaydedilince eşleşen ürünler otomatik işaretlenir).
+- **Fiyat takibi:** Fişte her ürünün altında son fiyat/en ucuz market; Menü > Fiyat takibi.
+- **Hızlı ekleme:** Özet ekranında “bimden 3 ekmek 45 lira” yazın (klavyenin mikrofonuyla sesli de olur).
+- **Akıllı rapor:** Önceki dönemle kategori karşılaştırması, yapay zeka yorumu ve tasarruf önerileri, Excel/PDF indirme.
+- **Asistan:** “Bu ay sigaraya ne kadar verdik?” gibi sorular.
+- **Karanlık tema** ve **PIN kilidi** (Menü > Ayarlar).

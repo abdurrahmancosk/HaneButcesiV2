@@ -45,7 +45,7 @@ jobs:
             --project "hanebutcesi2" \
             --product "Hane Bütçesi" \
             --org "com.evbutcesi" \
-            --android-permissions android.permission.INTERNET=true
+            --android-permissions android.permission.INTERNET=true android.permission.CAMERA=true
 
       - name: APK dosyasini hazirla
         run: |
@@ -93,7 +93,7 @@ jobs:
 
       - name: EXE derle
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "HaneButcesi" --collect-all flet --collect-all flet_desktop --collect-all certifi --hidden-import websockets --hidden-import flet_desktop main.py
+          pyinstaller --noconfirm --onefile --windowed --name "HaneButcesi" --collect-all flet --collect-all flet_desktop --collect-all certifi --hidden-import websockets --hidden-import flet_desktop --hidden-import openpyxl --add-data "assets;assets" main.py
 
       - name: Artifact yukle
         uses: actions/upload-artifact@v4

@@ -3,65 +3,26 @@ Hane Bütçesi v2 – Abdurrahman & Hatice
 Flet (Android/Windows) + Supabase (giriş, veritabanı, anlık senkron, fiş deposu) + Gemini (fiş analizi)
 """
 import asyncio
+import datetime as dt
 import inspect
 import uuid
 
 import flet as ft
 
+import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.0.0-deneme3"
+SURUM = "2.2.0"
 
-# ---------------------------------------------------------------------------
-# Renkler
-# ---------------------------------------------------------------------------
-ANA = "#0f766e"
-ARKA = "#f1f5f9"
-KART = "#ffffff"
-YAZI = "#0f172a"
-SOLUK = "#64748b"
-GELIR = "#16a34a"
-GIDER = "#dc2626"
-AKTARIM = "#2563eb"
-
-
-# ---------------------------------------------------------------------------
-# Flet sürüm uyumluluğu (0.2x ve 1.x)
-# ---------------------------------------------------------------------------
-def _param_var(cls, ad):
-    try:
-        return ad in inspect.signature(cls.__init__).parameters
-    except Exception:
-        return False
-
-
-def buton(metin, on_click=None, ikon=None, tip="filled", **kw):
-    cls = {"filled": ft.FilledButton, "outlined": ft.OutlinedButton, "text": ft.TextButton,
-           "tonal": getattr(ft, "FilledTonalButton", ft.FilledButton)}[tip]
-    if _param_var(cls, "text"):
-        return cls(text=metin, icon=ikon, on_click=on_click, **kw)
-    return cls(content=metin, icon=ikon, on_click=on_click, **kw)
-
-
-_SECENEK = getattr(ft, "DropdownOption", None) or ft.dropdown.Option
-
-
-def acilir(etiket, secenekler, deger=None, **kw):
-    return ft.Dropdown(label=etiket, value=deger, options=[_SECENEK(key=s, text=s) for s in secenekler], **kw)
-
-
-def kart(icerik, renk=KART, dolgu=14, **kw):
-    return ft.Container(content=icerik, bgcolor=renk, padding=dolgu, border_radius=14, **kw)
-
-
-def yazi(metin, boyut=14, kalin=False, renk=YAZI, **kw):
-    return ft.Text(metin, size=boyut, weight=ft.FontWeight.BOLD if kalin else None, color=renk, **kw)
+import hb_ui as ui
+from hb_ek import EkOzellikler
+from hb_ui import (ANA, GELIR, GIDER, AKTARIM, _param_var, buton, acilir, kart, yazi, KATEGORI_STIL, GUNLER, AYLAR_UZUN, ikon, kat_stil, saydam, golge, degrade, ORTA, simge_kutusu, cip, gun_basligi, fis_anahtari, grupla)
 
 
 # ---------------------------------------------------------------------------
 # Uygulama
 # ---------------------------------------------------------------------------
-class Uygulama:
+class Uygulama(EkOzellikler):
     def __init__(self, page: ft.Page):
         self.page = page
         self.supa = hb.Supabase()
@@ -84,11 +45,17 @@ class Uygulama:
         self.fis: dict | None = None
         self.picker = None
         self._nesil = 0
+        self._kamera_acik = False
+        p = str(getattr(page, "platform", "") or "").lower()
+        self.mobil = "android" in p or "ios" in p
+        self.ek_varsayilan()
+        self.tema_ayarla(bool(self._yerel_ayar().get("koyu")))
 
         page.title = "Hane Bütçesi"
         page.theme_mode = ft.ThemeMode.LIGHT
-        page.theme = ft.Theme(color_scheme_seed=ANA)
-        page.bgcolor = ARKA
+        page.theme = ft.Theme(color_scheme_seed=ANA, use_material3=True) if _param_var(ft.Theme, "use_material3") \
+            else ft.Theme(color_scheme_seed=ANA)
+        page.bgcolor = ui.ARKA
         page.padding = 0
         try:
             page.window.width, page.window.height = 430, 880
@@ -156,13 +123,16 @@ class Uygulama:
 
     # ------------------------------------------------------------ başlangıç
     async def baslat(self):
-        self.govde.content = ft.Column([ft.ProgressRing(), yazi("Yükleniyor...", renk=SOLUK)],
+        self.govde.content = ft.Column([ft.ProgressRing(), yazi("Yükleniyor...", renk=ui.SOLUK)],
                                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                        alignment=ft.MainAxisAlignment.CENTER, expand=True)
         self.guncelle()
         if await self.arka(self.supa.kayitli_oturumu_ac):
             try:
-                await self.oturum_basla()
+                if self._yerel_ayar().get("pin"):
+                    self.pin_ekrani(self.oturum_basla)
+                else:
+                    await self.oturum_basla()
                 return
             except Exception as e:
                 print("Kayıtlı oturum açılamadı:", e)
@@ -170,8 +140,10 @@ class Uygulama:
 
     def giris_ekrani(self, hata=""):
         self.page.navigation_bar = None
-        k_adi = ft.TextField(label="Kullanıcı adı", hint_text="Abdurrahman veya Hatice", autofocus=True)
-        sifre = ft.TextField(label="Şifre", password=True, can_reveal_password=True)
+        self.page.floating_action_button = None
+        k_adi = ft.TextField(label="Kullanıcı adı", hint_text="Abdurrahman veya Hatice", autofocus=True,
+                             prefix_icon=ft.Icons.PERSON_ROUNDED)
+        sifre = ft.TextField(label="Şifre", password=True, can_reveal_password=True, prefix_icon=ft.Icons.LOCK_ROUNDED)
         hatirla = ft.Checkbox(label="Beni hatırla", value=True)
         hata_y = yazi(hata, 12, renk=GIDER)
         bekle = ft.ProgressRing(visible=False, width=22, height=22)
@@ -198,16 +170,23 @@ class Uygulama:
 
         sifre.on_submit = giris
         kurulum_kutusu = ft.Column(spacing=10)
-        self.govde.content = ft.ListView(padding=24, spacing=14, controls=[
-            ft.Container(height=30),
-            ft.Row([ft.Icon(ft.Icons.SAVINGS, size=64, color=ANA)], alignment=ft.MainAxisAlignment.CENTER),
-            ft.Row([yazi("Hane Bütçesi", 28, True)], alignment=ft.MainAxisAlignment.CENTER),
-            ft.Row([yazi("Abdurrahman & Hatice", 13, renk=SOLUK)], alignment=ft.MainAxisAlignment.CENTER),
-            ft.Container(height=6),
-            kurulum_kutusu,
-            kart(ft.Column([k_adi, sifre, hatirla, buton("Giriş Yap", giris, ft.Icons.LOGIN, expand=True),
-                            ft.Row([bekle, hata_y])], spacing=12)),
-            ft.Row([yazi(f"Sürüm {SURUM}", 11, renk=SOLUK)], alignment=ft.MainAxisAlignment.CENTER),
+        self.govde.content = ft.ListView(padding=0, spacing=14, controls=[
+            ft.Container(content=ft.Column([
+                ft.Container(height=24),
+                ft.Container(content=ft.Icon(ft.Icons.SAVINGS_ROUNDED, size=46, color=ANA), bgcolor="white",
+                             width=84, height=84, border_radius=28, alignment=ORTA, shadow=golge(1.2)),
+                yazi("Hane Bütçesi", 30, True, renk="white"),
+                yazi("Abdurrahman & Hatice • ortak kasa", 13, renk="#ccfbf1"),
+                ft.Container(height=36)], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8),
+                gradient=degrade(["#0f766e", "#0d9488", "#2dd4bf"]), bgcolor=ANA, padding=20,
+                border_radius=ft.BorderRadius(0, 0, 36, 36) if hasattr(ft, "BorderRadius") else 0),
+            ft.Container(content=ft.Column([
+                kurulum_kutusu,
+                kart(ft.Column([yazi("Giriş yap", 18, True), k_adi, sifre, hatirla,
+                                buton("Giriş Yap", giris, ft.Icons.LOGIN_ROUNDED, expand=True, height=50),
+                                ft.Row([bekle, hata_y])], spacing=12), dolgu=20, shadow=golge(1)),
+                ft.Row([yazi(f"Sürüm {SURUM}", 11, renk=ui.SOLUK)], alignment=ft.MainAxisAlignment.CENTER),
+            ], spacing=14), padding=ft.Padding(20, 0, 20, 20)),
         ])
         self.guncelle()
         self.page.run_task(self._kurulum_kontrol, kurulum_kutusu)
@@ -220,7 +199,7 @@ class Uygulama:
             if e.durum == 404 or "hb_kurulum_durumu" in e.mesaj:
                 kutu.controls = [kart(yazi("⚠️ Veritabanı henüz kurulmamış. Supabase > SQL Editor'de "
                                            "'supabase_kurulum.sql' dosyasını bir kez çalıştırın, sonra uygulamayı "
-                                           "yeniden açın.", 12, renk=GIDER), renk="#fee2e2")]
+                                           "yeniden açın.", 12, renk=GIDER), renk=ui.UYARI_ZEMIN)]
                 self.guncelle()
             return
         except Exception:
@@ -230,7 +209,7 @@ class Uygulama:
             return
         kutu.controls = [kart(ft.Column([
             ft.Row([ft.Icon(ft.Icons.KEY, color=ANA), yazi("İlk kullanım: şifrenizi belirleyin", 14, True)]),
-            yazi("Şifresi henüz belirlenmemiş kullanıcılar:", 12, renk=SOLUK),
+            yazi("Şifresi henüz belirlenmemiş kullanıcılar:", 12, renk=ui.SOLUK),
             *[buton(f"{k.capitalize()} için şifre belirle", lambda e, k=k: self.sifre_belirle_ekrani(k),
                     ft.Icons.PERSON_ADD, tip="tonal", expand=True) for k in eksik],
         ], spacing=8), renk="#ccfbf1")]
@@ -272,7 +251,7 @@ class Uygulama:
             ft.Row([ft.Icon(ft.Icons.LOCK_RESET, size=56, color=ANA)], alignment=ft.MainAxisAlignment.CENTER),
             ft.Row([yazi(f"{ad} için şifre belirle", 22, True)], alignment=ft.MainAxisAlignment.CENTER),
             kart(ft.Column([
-                yazi(f"Bundan sonra kullanıcı adı olarak '{ad}' ve bu şifreyle giriş yapılacak.", 12, renk=SOLUK),
+                yazi(f"Bundan sonra kullanıcı adı olarak '{ad}' ve bu şifreyle giriş yapılacak.", 12, renk=ui.SOLUK),
                 s1, s2, buton("Şifreyi kaydet ve giriş yap", kaydet, ft.Icons.CHECK, expand=True),
                 ft.Row([bekle, hata_y]),
                 buton("Geri", lambda e: self.giris_ekrani(), tip="text"),
@@ -298,12 +277,18 @@ class Uygulama:
                 ft.NavigationBarDestination(icon=ft.Icons.RECEIPT_LONG_OUTLINED, selected_icon=ft.Icons.RECEIPT_LONG, label="İşlemler"),
                 ft.NavigationBarDestination(icon=ft.Icons.ADD_CIRCLE_OUTLINE, selected_icon=ft.Icons.ADD_CIRCLE, label="Ekle"),
                 ft.NavigationBarDestination(icon=ft.Icons.DOCUMENT_SCANNER_OUTLINED, selected_icon=ft.Icons.DOCUMENT_SCANNER, label="Fiş"),
-                ft.NavigationBarDestination(icon=ft.Icons.SETTINGS_OUTLINED, selected_icon=ft.Icons.SETTINGS, label="Ayarlar"),
+                ft.NavigationBarDestination(icon=ft.Icons.GRID_VIEW_OUTLINED, selected_icon=ft.Icons.GRID_VIEW_ROUNDED, label="Menü"),
             ])
+        self.page.floating_action_button = ft.FloatingActionButton(
+            icon=ft.Icons.DOCUMENT_SCANNER_ROUNDED, bgcolor="#7c3aed", foreground_color="white",
+            tooltip="Fiş tara", on_click=self.hizli_fis)
         self.sekme = 0
         await self.verileri_yenile(ciz=False)
         self.ekrani_ciz()
 
+        h = self.hatirlatmalar()
+        if h:
+            self.bildir("🔔 " + h[0]["metin"] + (f" (+{len(h) - 1} hatırlatma)" if len(h) > 1 else ""), GIDER)
         self.canli = hb.CanliBaglanti(self.supa, self.canli_degisiklik, self.canli_durum)
         self.page.run_task(self.canli.calistir)
         self._nesil += 1
@@ -334,18 +319,25 @@ class Uygulama:
     async def verileri_yenile(self, ciz=True):
         bas, bit = self.donem
         try:
-            self.islemler, self.bakiyeler = await asyncio.gather(
-                self.arka(self.supa.islemler, bas, bit), self.arka(self.supa.bakiyeler))
+            self.islemler, self.bakiyeler, _ = await asyncio.gather(
+                self.arka(self.supa.islemler, bas, bit), self.arka(self.supa.bakiyeler), self.ek_verileri_yenile())
         except Exception as e:
             print("Veri yenileme hatası:", e)
             if ciz:
                 self.bildir(f"Veriler alınamadı: {e}", GIDER)
-        if ciz and self.sekme in (0, 1):
+        if ciz and (self.sekme in (0, 1) or (self.sekme == 4 and self.alt_sayfa in
+                                             ("faturalar", "alisveris", "butceler", "hedefler", "borclar"))):
             self.ekrani_ciz()
 
     async def canli_degisiklik(self, veri: dict):
         kayit = veri.get("record") or {}
-        if veri.get("type") == "INSERT" and kayit.get("ekleyen") and kayit.get("ekleyen") != self.ben["id"]:
+        tablo = veri.get("table") or "hb_islemler"
+        baskasi = veri.get("type") == "INSERT" and kayit.get("ekleyen") and kayit.get("ekleyen") != self.ben["id"]
+        if baskasi and tablo == "hb_alisveris":
+            self.bildir(f"🛒 {kayit.get('ekleyen_ad') or 'Eşiniz'} listeye ekledi: {kayit.get('urun')}")
+        elif baskasi and tablo == "hb_faturalar":
+            self.bildir(f"🧾 {kayit.get('ekleyen_ad') or 'Eşiniz'} {kayit.get('tur')} faturası yükledi: {hb.tl(kayit.get('tutar'))}")
+        elif baskasi and tablo == "hb_islemler":
             self._yeni_bildirimler.append(kayit)
         if self._yenileme_planli:
             return
@@ -377,6 +369,8 @@ class Uygulama:
     # ------------------------------------------------------------ gezinme
     async def sekme_degisti(self, e):
         self.sekme = int(e.control.selected_index)
+        if self.sekme == 4:
+            self.alt_sayfa = None
         self.ekrani_ciz()
 
     def sekmeye_git(self, i):
@@ -385,8 +379,13 @@ class Uygulama:
             self.page.navigation_bar.selected_index = i
         self.ekrani_ciz()
 
+
     def ekrani_ciz(self, **kw):
-        ciziciler = [self.ozet_ekrani, self.islemler_ekrani, self.ekle_ekrani, self.fis_ekrani, self.ayarlar_ekrani]
+        if getattr(self, "_kamera_acik", False):
+            return  # kamera açıkken arka plan yenilemeleri ekranı bozmasın
+        ciziciler = [self.ozet_ekrani, self.islemler_ekrani, self.ekle_ekrani, self.fis_ekrani, self.menu_ekrani]
+        if self.page.floating_action_button:
+            self.page.floating_action_button.visible = self.sekme in (0, 1)
         try:
             self.govde.content = ciziciler[self.sekme](**kw)
         except Exception as e:
@@ -395,7 +394,6 @@ class Uygulama:
             self.govde.content = ft.ListView(padding=16, controls=[yazi(f"Ekran hatası: {e}", renk=GIDER)])
         self.guncelle()
 
-    # ------------------------------------------------------------ ortak parçalar
     def donem_cubugu(self):
         bas, bit = self.donem
 
@@ -412,184 +410,550 @@ class Uygulama:
         async def bugun(e):
             await kaydir(0)
 
-        return kart(ft.Row([
-            ft.IconButton(icon=ft.Icons.CHEVRON_LEFT, on_click=geri, tooltip="Önceki dönem"),
-            ft.Column([yazi("Bütçe dönemi" + ("" if self.donem_ofset == 0 else " (geçmiş/gelecek)"), 11, renk=SOLUK),
-                       yazi(hb.donem_etiketi(bas, bit), 15, True)],
+        etiket = "Bu dönem" if self.donem_ofset == 0 else ("Geçmiş dönem" if self.donem_ofset < 0 else "Gelecek dönem")
+        return ft.Container(content=ft.Row([
+            ft.IconButton(icon=ft.Icons.CHEVRON_LEFT_ROUNDED, on_click=geri, tooltip="Önceki dönem"),
+            ft.Column([yazi(etiket, 11, renk=ui.SOLUK), yazi(hb.donem_etiketi(bas, bit), 14, True)],
                       spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True),
-            ft.IconButton(icon=ft.Icons.TODAY, on_click=bugun, tooltip="Bu döneme dön",
-                          visible=self.donem_ofset != 0),
-            ft.IconButton(icon=ft.Icons.CHEVRON_RIGHT, on_click=ileri, tooltip="Sonraki dönem"),
-        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), dolgu=4)
+            ft.IconButton(icon=ft.Icons.TODAY_ROUNDED, on_click=bugun, tooltip="Bu döneme dön",
+                          visible=self.donem_ofset != 0, icon_color=ANA),
+            ft.IconButton(icon=ft.Icons.CHEVRON_RIGHT_ROUNDED, on_click=ileri, tooltip="Sonraki dönem"),
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), bgcolor=ui.KART, border_radius=16, padding=4,
+            shadow=golge(0.6))
 
-    def islem_satiri(self, i):
+
+    def islem_satiri(self, i, tarih_goster=True):
         tur = i.get("tur")
+        simge, renk = kat_stil(i.get("kategori"), tur)
         if tur == "Gelir":
-            renk, ikon, isaret = GELIR, ft.Icons.SOUTH_WEST, "+"
+            isaret, tutar_renk = "+", GELIR
         elif tur == "Gider":
-            renk, ikon, isaret = GIDER, ft.Icons.NORTH_EAST, "-"
+            isaret, tutar_renk = "-", ui.YAZI
         else:
-            renk, ikon = AKTARIM, ft.Icons.SWAP_HORIZ
+            tutar_renk = AKTARIM
             isaret = "+" if (not self.yonetici and i.get("hedef_kasa") == self.ben["id"]) else ("-" if not self.yonetici else "")
         if tur == "Aktarım":
             baslik = f"{self.ad(i.get('kasa_sahibi'))} ➜ {self.ad(i.get('hedef_kasa'))}"
             alt = [i.get("aciklama") or "Para aktarımı"]
         else:
             baslik = i.get("urun") or i.get("kategori") or tur
-            alt = [i.get("firma"), i.get("kategori")]
-        alt.append(hb.tarih_goster(i.get("tarih")))
-        etiketler = [ft.Icon(ft.Icons.PERSON, size=13, color=SOLUK), yazi(i.get("ekleyen_ad") or "?", 11, renk=SOLUK)]
+            alt = [i.get("firma"), i.get("kategori") if tur == "Gider" else (i.get("kategori") or "Gelir")]
+        d = hb.tarih_yerel(i.get("tarih"))
+        alt.append(d.strftime("%d.%m %H:%M") if tarih_goster else d.strftime("%H:%M"))
+        etiketler = [ft.Icon(ft.Icons.PERSON_ROUNDED, size=12, color=ui.SOLUK), yazi(i.get("ekleyen_ad") or "?", 10.5, renk=ui.SOLUK)]
         if self.yonetici and tur != "Aktarım":
-            etiketler += [ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET, size=13, color=SOLUK),
-                          yazi(f"{self.ad(i.get('kasa_sahibi'))} kasası", 11, renk=SOLUK)]
+            etiketler += [ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, size=12, color=ui.SOLUK),
+                          yazi(self.ad(i.get("kasa_sahibi")), 10.5, renk=ui.SOLUK)]
         if i.get("fis_gorsel"):
-            etiketler += [ft.Icon(ft.Icons.RECEIPT, size=13, color=ANA)]
+            etiketler.append(ft.Icon(ft.Icons.RECEIPT_ROUNDED, size=12, color=ANA))
         if i.get("gizli"):
-            etiketler += [ft.Icon(ft.Icons.LOCK, size=13, color="#b45309"), yazi("Gizli", 11, renk="#b45309")]
-
+            etiketler += [ft.Icon(ft.Icons.LOCK_ROUNDED, size=12, color="#b45309"), yazi("Gizli", 10.5, renk="#b45309")]
         return ft.Container(
             content=ft.Row([
-                ft.Container(content=ft.Icon(ikon, color=renk, size=20), bgcolor="#1f" + renk[1:], padding=8, border_radius=20),
-                ft.Column([yazi(baslik, 14, True, max_lines=1),
-                           yazi(" • ".join(x for x in alt if x), 11, renk=SOLUK, max_lines=1),
+                simge_kutusu(simge, renk),
+                ft.Column([yazi(baslik, 14, True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                           yazi(" • ".join(x for x in alt if x), 11, renk=ui.SOLUK, max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS),
                            ft.Row(etiketler, spacing=3)], spacing=1, expand=True),
-                yazi(f"{isaret}{hb.tl(i.get('tutar'))}", 14, True, renk=renk),
-            ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            bgcolor=KART, padding=10, border_radius=12,
+                yazi(f"{isaret}{hb.tl(i.get('tutar'))}", 14, True, renk=tutar_renk),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
+            bgcolor=ui.KART, padding=12, border_radius=16, shadow=golge(0.5),
             on_click=lambda e, i=i: self.islem_detay(i))
 
-    # ------------------------------------------------------------ 0) ÖZET
     def ozet_ekrani(self):
         bas, bit = self.donem
         canli = self.canli and self.canli.bagli
-        ust = ft.Row([
-            ft.Column([yazi(f"Merhaba {self.ben['ad']} 👋", 20, True),
-                       yazi("Yönetici" if self.yonetici else "Kendi kasanızı görüyorsunuz", 12, renk=SOLUK)],
-                      spacing=0, expand=True),
-            ft.Container(content=ft.Row([ft.Icon(ft.Icons.CIRCLE, size=10, color=GELIR if canli else "#94a3b8"),
-                                 yazi("Canlı" if canli else "Bağlanıyor", 11, renk=SOLUK)], spacing=4),
-                         bgcolor=KART, padding=8, border_radius=20),
-        ])
         bak = {b["kisi"]: float(b.get("bakiye") or 0) for b in self.bakiyeler}
-        kontroller = [ust, self.donem_cubugu()]
+        saat = hb.simdi().hour
+        selam = "Günaydın" if 5 <= saat < 12 else ("İyi günler" if 12 <= saat < 18 else "İyi akşamlar")
 
+        ust = ft.Row([
+            ft.Column([yazi(f"{selam}, {self.ben['ad']}", 22, True),
+                       yazi("Hane yöneticisi" if self.yonetici else "Kendi kasanız", 12, renk=ui.SOLUK)],
+                      spacing=0, expand=True),
+            ft.Container(content=ft.Row([ft.Icon(ft.Icons.CIRCLE, size=9, color=GELIR if canli else "#94a3b8"),
+                                         yazi("Canlı" if canli else "Bağlanıyor", 11, renk=ui.SOLUK)], spacing=5, tight=True),
+                         bgcolor=ui.KART, padding=ft.Padding(10, 6, 10, 6), border_radius=20, shadow=golge(0.4)),
+        ])
+
+        # --- Kasa kartı ---
         if self.yonetici:
             toplam = sum(bak.values())
-            kontroller.append(kart(ft.Column([
-                yazi("Toplam Kasa", 13, renk="#ccfbf1"),
-                yazi(hb.tl(toplam), 30, True, renk="white"),
-                ft.Row([self._mini_kasa(self.ad(pid), deger) for pid, deger in bak.items()], spacing=10),
-            ], spacing=6), renk=ANA, dolgu=18))
+            kasalar = ft.Row([self._mini_kasa(self.ad(pid), deger) for pid, deger in bak.items()], spacing=10)
+            kasa_icerik = [ft.Row([ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, color="#ccfbf1", size=18),
+                                   yazi("Toplam Kasa", 13, renk="#ccfbf1")], spacing=6),
+                           yazi(hb.tl(toplam), 34, True, renk="white"), ft.Container(height=4), kasalar]
         else:
-            kontroller.append(kart(ft.Column([
-                yazi("Kasam", 13, renk="#ccfbf1"),
-                yazi(hb.tl(bak.get(self.ben["id"], 0)), 30, True, renk="white"),
-            ], spacing=4), renk=ANA, dolgu=18))
+            kasa_icerik = [ft.Row([ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, color="#ccfbf1", size=18),
+                                   yazi("Kasam", 13, renk="#ccfbf1")], spacing=6),
+                           yazi(hb.tl(bak.get(self.ben["id"], 0)), 34, True, renk="white")]
+        kasa_karti = ft.Container(content=ft.Column(kasa_icerik, spacing=4), padding=20, border_radius=24,
+                                  gradient=degrade(["#0f766e", "#0d9488", "#14b8a6"]), bgcolor=ANA,
+                                  shadow=golge(1.2))
 
         oz = hb.donem_ozeti(self.islemler, None if self.yonetici else self.ben["id"])
+        kontroller = [ust, kasa_karti, *self.ozet_ekleri(), self.donem_cubugu()]
+
         kontroller.append(ft.Row([
-            self._ozet_kutu("Dönem geliri", oz["gelir"], GELIR, ft.Icons.TRENDING_UP),
-            self._ozet_kutu("Dönem gideri", oz["gider"], GIDER, ft.Icons.TRENDING_DOWN),
-        ], spacing=10))
+            self._ozet_kutu("Gelir", oz["gelir"], GELIR, ft.Icons.SOUTH_WEST_ROUNDED),
+            self._ozet_kutu("Gider", oz["gider"], GIDER, ft.Icons.NORTH_EAST_ROUNDED),
+            self._ozet_kutu("Net", oz["net"], ANA if oz["net"] >= 0 else GIDER, ft.Icons.BALANCE_ROUNDED),
+        ], spacing=8))
+
+        # --- Harcama temposu + günlük grafik ---
+        bugun = hb.simdi().date()
+        toplam_gun = (bit - bas).days + 1
+        gecen_gun = min(max((bugun - bas).days + 1, 1), toplam_gun) if bugun >= bas else 0
+        gunluk = {}
+        for i in self.islemler:
+            if i.get("tur") != "Gider" or (not self.yonetici and i.get("kasa_sahibi") != self.ben["id"]):
+                continue
+            g = hb.tarih_yerel(i.get("tarih")).date()
+            gunluk[g] = gunluk.get(g, 0) + float(i.get("tutar") or 0)
+        if gecen_gun:
+            ort = oz["gider"] / gecen_gun
+            tahmin = ort * toplam_gun
+            oran = (oz["gider"] / oz["gelir"]) if oz["gelir"] else None
+            tempo = [
+                ft.Row([yazi("Harcama temposu", 15, True, expand=True),
+                        yazi(f"{gecen_gun}/{toplam_gun}. gün", 11, renk=ui.SOLUK)]),
+                ft.Row([
+                    ft.Stack([ft.ProgressRing(value=min(gecen_gun / toplam_gun, 1), width=58, height=58,
+                                              stroke_width=6, color=ANA, bgcolor=ui.CIZGI),
+                              ft.Container(content=yazi(f"%{int(100 * gecen_gun / toplam_gun)}", 12, True),
+                                           width=58, height=58, alignment=ORTA)], width=58, height=58),
+                    ft.Column([
+                        ft.Row([yazi("Günlük ortalama", 12, renk=ui.SOLUK, expand=True), yazi(hb.tl(ort), 13, True)]),
+                        ft.Row([yazi("Dönem sonu tahmini", 12, renk=ui.SOLUK, expand=True),
+                                yazi(hb.tl(tahmin), 13, True, renk=GIDER if oz["gelir"] and tahmin > oz["gelir"] else ui.YAZI)]),
+                        ft.Row([yazi("Gelirin harcanan kısmı", 12, renk=ui.SOLUK, expand=True),
+                                yazi(f"%{int(oran * 100)}" if oran is not None else "—", 13, True,
+                                     renk=GIDER if oran and oran > 0.9 else ui.YAZI)]),
+                    ], spacing=4, expand=True),
+                ], spacing=14),
+            ]
+            enb = max(gunluk.values()) if gunluk else 0
+            if enb:
+                cubuklar = []
+                for n in range(toplam_gun):
+                    g = bas + dt.timedelta(days=n)
+                    v = gunluk.get(g, 0)
+                    cubuklar.append(ft.Container(
+                        expand=1, height=max(3, 70 * v / enb) if v else 3, border_radius=3,
+                        bgcolor=(ANA if g == bugun else "#5eead4") if v else ui.CIZGI,
+                        tooltip=f"{g.day} {hb.AYLAR[g.month - 1]}: {hb.tl(v)}"))
+                tempo += [ft.Container(height=4),
+                          ft.Row(cubuklar, spacing=2, vertical_alignment=ft.CrossAxisAlignment.END, height=72),
+                          ft.Row([yazi(f"{bas.day} {hb.AYLAR[bas.month - 1]}", 10, renk=ui.SOLUK, expand=True),
+                                  yazi(f"{bit.day} {hb.AYLAR[bit.month - 1]}", 10, renk=ui.SOLUK)])]
+            kontroller.append(kart(ft.Column(tempo, spacing=8), dolgu=16, shadow=golge(0.6)))
+
         if not self.yonetici and (oz["aktarim_giris"] or oz["aktarim_cikis"]):
             kontroller.append(kart(ft.Row([
+                simge_kutusu(ft.Icons.SWAP_HORIZ_ROUNDED, AKTARIM, kutu=34, boyut=18),
                 yazi("Aktarımlar", 13, True, expand=True),
-                yazi(f"Gelen {hb.tl(oz['aktarim_giris'])}", 12, renk=GELIR),
-                yazi(f"Giden {hb.tl(oz['aktarim_cikis'])}", 12, renk=GIDER)], spacing=10)))
+                yazi(f"+{hb.tl(oz['aktarim_giris'])}", 12, True, renk=GELIR),
+                yazi(f"-{hb.tl(oz['aktarim_cikis'])}", 12, True, renk=GIDER)], spacing=10), shadow=golge(0.5)))
 
-        if self.yonetici:
-            satirlar = []
+        if self.yonetici and len(self.profiller) > 1:
+            satirlar = [yazi("Kim ne harcadı?", 15, True)]
+            toplam_g = sum(hb.donem_ozeti(self.islemler, p)["gider"] for p in self.profiller) or 1
             for pid in self.profiller:
                 o = hb.donem_ozeti(self.islemler, pid)
-                satirlar.append(ft.Row([yazi(self.ad(pid), 13, True, expand=True),
-                                        yazi(f"+{hb.tl(o['gelir'])}", 12, renk=GELIR),
-                                        yazi(f"-{hb.tl(o['gider'])}", 12, renk=GIDER)], spacing=10))
-            kontroller.append(kart(ft.Column([yazi("Kişi bazında bu dönem", 13, True)] + satirlar, spacing=8)))
+                satirlar.append(ft.Column([
+                    ft.Row([ft.Icon(ft.Icons.PERSON_ROUNDED, size=16, color=ANA), yazi(self.ad(pid), 13, True, expand=True),
+                            yazi(hb.tl(o["gider"]), 13, True)]),
+                    ft.ProgressBar(value=o["gider"] / toplam_g, color="#14b8a6", bgcolor=ui.CIZGI, height=6,
+                                   border_radius=3) if _param_var(ft.ProgressBar, "border_radius")
+                    else ft.ProgressBar(value=o["gider"] / toplam_g, color="#14b8a6", bgcolor=ui.CIZGI),
+                ], spacing=4))
+            kontroller.append(kart(ft.Column(satirlar, spacing=10), dolgu=16, shadow=golge(0.5)))
 
         if oz["kategoriler"]:
-            enb = max(oz["kategoriler"].values()) or 1
-            kat_sat = [yazi("Harcama kategorileri", 13, True)]
+            toplam_kat = sum(oz["kategoriler"].values()) or 1
+            kat_sat = [ft.Row([yazi("Kategoriler", 15, True, expand=True), yazi(f"{len(oz['kategoriler'])} kategori", 11, renk=ui.SOLUK)])]
             for k, v in list(oz["kategoriler"].items())[:8]:
-                kat_sat.append(ft.Column([
-                    ft.Row([yazi(k, 12, expand=True, max_lines=1), yazi(hb.tl(v), 12, True)]),
-                    ft.ProgressBar(value=v / enb, color=ANA, bgcolor="#e2e8f0"),
-                ], spacing=3))
-            kontroller.append(kart(ft.Column(kat_sat, spacing=10)))
+                simge, renk = kat_stil(k)
+                kat_sat.append(ft.Row([
+                    simge_kutusu(simge, renk, boyut=17, kutu=34),
+                    ft.Column([
+                        ft.Row([yazi(k, 12.5, True, expand=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                                yazi(hb.tl(v), 12.5, True)]),
+                        ft.Row([ft.Row([ft.Container(bgcolor=renk, border_radius=3, height=6,
+                                                     expand=max(1, int(1000 * v / toplam_kat))),
+                                        ft.Container(bgcolor=ui.ZEMIN2, border_radius=3, height=6,
+                                                     expand=max(1, 1000 - int(1000 * v / toplam_kat)))],
+                                       spacing=0, expand=True),
+                                yazi(f"%{round(100 * v / toplam_kat)}", 10.5, renk=ui.SOLUK, width=34,
+                                     text_align=ft.TextAlign.RIGHT)], spacing=6),
+                    ], spacing=3, expand=True),
+                ], spacing=10))
+            kontroller.append(kart(ft.Column(kat_sat, spacing=12), dolgu=16, shadow=golge(0.5)))
 
-        son = self.islemler[:8]
-        kontroller.append(ft.Row([yazi("Son işlemler", 15, True, expand=True),
+        kontroller.append(ft.Row([yazi("Son işlemler", 16, True, expand=True),
                                   buton("Tümü", lambda e: self.sekmeye_git(1), tip="text")]))
+        son = grupla(self.islemler)[:8]
         if son:
-            kontroller += [self.islem_satiri(i) for i in son]
+            kontroller += [self.liste_ogesi(x) for x in son]
         else:
-            kontroller.append(kart(yazi("Bu dönemde henüz kayıt yok. 'Ekle' veya 'Fiş' sekmesinden başlayın.",
-                                        13, renk=SOLUK)))
-        return ft.ListView(padding=14, spacing=10, controls=kontroller, expand=True)
+            kontroller.append(kart(ft.Column([
+                ft.Icon(ft.Icons.INBOX_ROUNDED, size=40, color="#cbd5e1"),
+                yazi("Bu dönemde henüz kayıt yok", 14, True),
+                yazi("Sağ alttaki düğmeyle fişinizi tarayın ya da 'Ekle' sekmesinden kayıt girin.", 12, renk=ui.SOLUK,
+                     text_align=ft.TextAlign.CENTER)], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+                dolgu=24))
+        kontroller.append(ft.Container(height=70))
+        return ft.ListView(padding=16, spacing=12, controls=kontroller, expand=True)
+
 
     def _mini_kasa(self, ad, deger):
-        return ft.Container(content=ft.Column([yazi(ad, 11, renk="#ccfbf1"), yazi(hb.tl(deger), 15, True, renk="white")],
-                                      spacing=0), bgcolor="#115e59", padding=10, border_radius=10, expand=True)
+        return ft.Container(content=ft.Column([yazi(ad, 11, renk="#ccfbf1"), yazi(hb.tl(deger), 16, True, renk="white")],
+                                              spacing=0), bgcolor="#33ffffff", padding=12, border_radius=14, expand=True)
 
-    def _ozet_kutu(self, baslik, deger, renk, ikon):
-        return kart(ft.Column([ft.Row([ft.Icon(ikon, color=renk, size=18), yazi(baslik, 12, renk=SOLUK)], spacing=4),
-                               yazi(hb.tl(deger), 17, True, renk=renk)], spacing=4), expand=True)
 
-    # ------------------------------------------------------------ 1) İŞLEMLER
+    def _ozet_kutu(self, baslik, deger, renk, simge):
+        return ft.Container(content=ft.Column([
+            ft.Row([ft.Icon(simge, color=renk, size=16), yazi(baslik, 11.5, renk=ui.SOLUK)], spacing=4),
+            yazi(hb.tl(deger), 14.5, True, renk=renk, max_lines=1)], spacing=4),
+            bgcolor=ui.KART, padding=12, border_radius=16, expand=True, shadow=golge(0.5))
+
     def islemler_ekrani(self):
         liste = ft.Column(spacing=8)
+        cipler = ft.Row(spacing=6, wrap=True)
+        kasa_cipleri = ft.Row(spacing=6, wrap=True)
 
         def doldur():
             f = self.filtre
             ara = hb.urun_anahtari(f["arama"])
             sonuc = []
+            kid = next((p for p, v in self.profiller.items() if v["ad"] == f["kasa"]), None)
             for i in self.islemler:
                 if f["tur"] != "Tümü" and i.get("tur") != f["tur"]:
                     continue
-                if self.yonetici and f["kasa"] != "Hepsi":
-                    kid = next((p for p, v in self.profiller.items() if v["ad"] == f["kasa"]), None)
-                    if i.get("kasa_sahibi") != kid and i.get("hedef_kasa") != kid:
-                        continue
+                if self.yonetici and kid and i.get("kasa_sahibi") != kid and i.get("hedef_kasa") != kid:
+                    continue
                 if ara:
                     metin = hb.urun_anahtari(" ".join(str(i.get(k) or "") for k in
                                                       ("urun", "firma", "kategori", "aciklama", "ekleyen_ad")))
                     if ara not in metin:
                         continue
                 sonuc.append(i)
-            toplam_gider = sum(float(x.get("tutar") or 0) for x in sonuc if x.get("tur") == "Gider")
-            toplam_gelir = sum(float(x.get("tutar") or 0) for x in sonuc if x.get("tur") == "Gelir")
-            liste.controls = [ft.Row([yazi(f"{len(sonuc)} kayıt", 12, renk=SOLUK, expand=True),
-                                      yazi(f"+{hb.tl(toplam_gelir)}", 12, renk=GELIR),
-                                      yazi(f"-{hb.tl(toplam_gider)}", 12, renk=GIDER)], spacing=8)]
-            liste.controls += [self.islem_satiri(i) for i in sonuc[:400]] or [
-                kart(yazi("Kayıt bulunamadı.", 13, renk=SOLUK))]
+            gider = sum(float(x.get("tutar") or 0) for x in sonuc if x.get("tur") == "Gider")
+            gelir = sum(float(x.get("tutar") or 0) for x in sonuc if x.get("tur") == "Gelir")
+            ogeler = [ft.Row([yazi(f"{len(sonuc)} kayıt", 12, renk=ui.SOLUK, expand=True),
+                              yazi(f"+{hb.tl(gelir)}", 12, True, renk=GELIR),
+                              yazi(f"-{hb.tl(gider)}", 12, True, renk=GIDER)], spacing=10)]
+            # günlere böl, her günün içinde fişleri grupla
+            gunler = {}
+            for i in sonuc:
+                gunler.setdefault(hb.tarih_yerel(i.get("tarih")).date(), []).append(i)
+            sayac = 0
+            for g in sorted(gunler, reverse=True):
+                satirlar = gunler[g]
+                g_gider = sum(float(x.get("tutar") or 0) for x in satirlar if x.get("tur") == "Gider")
+                ogeler.append(ft.Container(content=ft.Row([
+                    yazi(gun_basligi(g), 13, True, renk=ui.SOLUK, expand=True),
+                    yazi(f"-{hb.tl(g_gider)}" if g_gider else "", 12, True, renk=ui.SOLUK)]), padding=ft.Padding(4, 10, 4, 0)))
+                for x in grupla(satirlar):
+                    ogeler.append(self.liste_ogesi(x, tarih_goster=False))
+                    sayac += 1
+                if sayac > 300:
+                    ogeler.append(yazi("… daha eski kayıtlar için aramayı daraltın", 12, renk=ui.SOLUK))
+                    break
+            if not sonuc:
+                ogeler.append(kart(ft.Column([ft.Icon(ft.Icons.SEARCH_OFF_ROUNDED, size=36, color="#cbd5e1"),
+                                              yazi("Kayıt bulunamadı", 13, renk=ui.SOLUK)],
+                                             horizontal_alignment=ft.CrossAxisAlignment.CENTER), dolgu=24))
+            liste.controls = ogeler
+            cipler.controls = [cip(t, f["tur"] == t, lambda e, t=t: sec("tur", t),
+                                   {"Gider": GIDER, "Gelir": GELIR, "Aktarım": AKTARIM}.get(t, ANA))
+                               for t in ("Tümü", "Gider", "Gelir", "Aktarım")]
+            kasa_cipleri.controls = [cip(k, f["kasa"] == k, lambda e, k=k: sec("kasa", k), "#475569",
+                                         ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED if k != "Hepsi" else None)
+                                     for k in ["Hepsi"] + [p["ad"] for p in self.profiller.values()]]
+
+        def sec(alan, deger):
+            self.filtre[alan] = deger
+            doldur()
+            self.guncelle()
 
         def arama_degisti(e):
             self.filtre["arama"] = e.control.value or ""
             doldur()
             self.guncelle()
 
-        def tur_degisti(e):
-            self.filtre["tur"] = e.control.value
-            doldur()
-            self.guncelle()
-
-        def kasa_degisti(e):
-            self.filtre["kasa"] = e.control.value
-            doldur()
-            self.guncelle()
-
-        arama = ft.TextField(value=self.filtre["arama"], hint_text="Ara: ürün, market, kategori, kişi...",
-                             prefix_icon=ft.Icons.SEARCH, on_change=arama_degisti, bgcolor=KART, border_radius=12)
-        turler = ft.RadioGroup(value=self.filtre["tur"], on_change=tur_degisti, content=ft.Row(
-            [ft.Radio(value=t, label=t) for t in ("Tümü", "Gider", "Gelir", "Aktarım")], wrap=True, spacing=0))
-        filtreler = [arama, turler]
-        if self.yonetici:
-            filtreler.append(ft.RadioGroup(value=self.filtre["kasa"], on_change=kasa_degisti, content=ft.Row(
-                [ft.Radio(value="Hepsi", label="Tüm kasalar")] +
-                [ft.Radio(value=p["ad"], label=p["ad"]) for p in self.profiller.values()], wrap=True, spacing=0)))
+        arama = ft.TextField(value=self.filtre["arama"], hint_text="Ürün, market, kategori, kişi ara…",
+                             prefix_icon=ft.Icons.SEARCH_ROUNDED, on_change=arama_degisti, bgcolor=ui.KART,
+                             border_radius=16, border_color="transparent", dense=True)
         doldur()
-        return ft.ListView(padding=14, spacing=10, expand=True,
-                           controls=[self.donem_cubugu(), kart(ft.Column(filtreler, spacing=4), dolgu=8), liste])
+        ust = [self.donem_cubugu(), ft.Container(content=arama, shadow=golge(0.4), border_radius=16), cipler]
+        if self.yonetici:
+            ust.append(kasa_cipleri)
+        return ft.ListView(padding=16, spacing=10, expand=True, controls=ust + [liste, ft.Container(height=70)])
+
+    def fis_karti(self, satirlar, tarih_goster=True):
+        ilk = satirlar[0]
+        toplam = sum(float(x.get("tutar") or 0) for x in satirlar)
+        kat = {}
+        for x in satirlar:
+            kat[x.get("kategori") or "Diğer"] = kat.get(x.get("kategori") or "Diğer", 0) + float(x.get("tutar") or 0)
+        ana_kat = max(kat, key=kat.get)
+        d = hb.tarih_yerel(ilk.get("tarih"))
+        renkli = ft.Row([ft.Container(width=max(4, int(64 * v / (toplam or 1))), height=5, border_radius=3,
+                                      bgcolor=kat_stil(k)[1]) for k, v in sorted(kat.items(), key=lambda kv: -kv[1])[:6]],
+                        spacing=2)
+        etiketler = [ft.Icon(ft.Icons.PERSON_ROUNDED, size=12, color=ui.SOLUK), yazi(ilk.get("ekleyen_ad") or "?", 10.5, renk=ui.SOLUK)]
+        if self.yonetici:
+            etiketler += [ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, size=12, color=ui.SOLUK),
+                          yazi(self.ad(ilk.get("kasa_sahibi")), 10.5, renk=ui.SOLUK)]
+        if any(x.get("gizli") for x in satirlar):
+            etiketler += [ft.Icon(ft.Icons.LOCK_ROUNDED, size=12, color="#b45309")]
+        return ft.Container(
+            content=ft.Row([
+                simge_kutusu(ft.Icons.RECEIPT_LONG_ROUNDED, ANA),
+                ft.Column([
+                    yazi(ilk.get("firma") or "Fiş", 14, True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    yazi(f"{len(satirlar)} ürün • {ana_kat} • " +
+                         (d.strftime("%d.%m %H:%M") if tarih_goster else d.strftime("%H:%M")), 11, renk=ui.SOLUK,
+                         max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    ft.Row([renkli, *etiketler], spacing=4),
+                ], spacing=2, expand=True),
+                ft.Column([yazi(f"-{hb.tl(toplam)}", 14, True),
+                           ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, size=16, color=ui.SOLUK)],
+                          horizontal_alignment=ft.CrossAxisAlignment.END, spacing=0),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
+            bgcolor=ui.KART, padding=12, border_radius=16, shadow=golge(0.5),
+            on_click=lambda e, s=satirlar: self.fis_detay(s))
+
+    def fis_detay(self, satirlar):
+        ilk = satirlar[0]
+        toplam = sum(float(x.get("tutar") or 0) for x in satirlar)
+        d = ft.AlertDialog()
+
+        def ac(i):
+            self.dialog_kapat(d)
+            self.islem_detay(i)
+
+        liste = []
+        for x in sorted(satirlar, key=lambda s: -float(s.get("tutar") or 0)):
+            simge, renk = kat_stil(x.get("kategori"))
+            liste.append(ft.Container(content=ft.Row([
+                ft.Icon(simge, color=renk, size=18),
+                ft.Column([yazi(x.get("urun") or "-", 13, max_lines=2),
+                           yazi(" • ".join(v for v in [x.get("miktar"), x.get("kategori")] if v), 10.5, renk=ui.SOLUK)],
+                          spacing=0, expand=True),
+                yazi(hb.tl(x.get("tutar")), 13, True)], spacing=8), padding=6, border_radius=10,
+                on_click=lambda e, i=x: ac(i)))
+
+        async def gorsel(e):
+            self.dialog_kapat(d)
+            await self.fis_gorseli_goster(ilk.get("fis_gorsel"))
+
+        async def tumunu_sil(e):
+            self.dialog_kapat(d)
+            try:
+                if ilk.get("fis_grup"):
+                    await self.arka(self.supa.fis_grubu_sil, ilk["fis_grup"])
+                else:
+                    for x in satirlar:
+                        await self.arka(self.supa.islem_sil, x["id"])
+                self.bildir("Fiş silindi.")
+                await self.verileri_yenile()
+            except Exception as ex:
+                self.bildir(f"Silinemedi: {ex}", GIDER)
+
+        def sil_onay(e):
+            async def evet(ev):
+                self.dialog_kapat(o)
+                await tumunu_sil(ev)
+            o = ft.AlertDialog(title=yazi("Fiş silinsin mi?", 16, True),
+                               content=yazi(f"{len(satirlar)} ürün ({hb.tl(toplam)}) silinecek."),
+                               actions=[buton("Vazgeç", lambda ev: self.dialog_kapat(o), tip="text"), buton("Sil", evet)])
+            self.dialog_kapat(d)
+            self.dialog_ac(o)
+
+        d.title = ft.Column([yazi(ilk.get("firma") or "Fiş", 18, True),
+                             yazi(f"{hb.tarih_goster(ilk.get('tarih'))} • {len(satirlar)} ürün • {ilk.get('ekleyen_ad') or ''}",
+                                  12, renk=ui.SOLUK)], spacing=2, tight=True)
+        d.content = ft.Container(content=ft.Column(liste + [ft.Divider(), ft.Row(
+            [yazi("Toplam", 14, True, expand=True), yazi(hb.tl(toplam), 16, True, renk=ANA)])],
+            scroll=ft.ScrollMode.AUTO, tight=True, spacing=2), width=380)
+        eylemler = []
+        if ilk.get("fis_gorsel"):
+            eylemler.append(buton("Fişi gör", gorsel, ft.Icons.IMAGE_ROUNDED, tip="text"))
+        if all(self.izinli(x) for x in satirlar):
+            eylemler.append(buton("Fişi sil", sil_onay, ft.Icons.DELETE_ROUNDED, tip="text"))
+        eylemler.append(buton("Kapat", lambda e: self.dialog_kapat(d), tip="text"))
+        d.actions = eylemler
+        self.dialog_ac(d)
+
+    def liste_ogesi(self, x, tarih_goster=True):
+        return self.fis_karti(x, tarih_goster) if isinstance(x, list) else self.islem_satiri(x, tarih_goster)
+
+    def _buyuk_secenek(self, simge, baslik, aciklama, on_click, renk, vurgulu=False):
+        return ft.Container(content=ft.Row([
+            ft.Container(content=ft.Icon(simge, color="white" if vurgulu else renk, size=28),
+                         bgcolor=renk if vurgulu else saydam(renk), width=56, height=56, border_radius=18, alignment=ORTA),
+            ft.Column([yazi(baslik, 15, True), yazi(aciklama, 11.5, renk=ui.SOLUK)], spacing=2, expand=True),
+            ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.SOLUK)], spacing=14),
+            bgcolor=ui.KART, padding=14, border_radius=20, shadow=golge(0.6), on_click=on_click)
+
+    async def kamera_ekrani(self, mod="fis"):
+        """Uygulama içi kamera: çok sayfalı çekim, flaş, önizleme; bitince yapay zeka analizine gönderir."""
+        try:
+            import flet_camera as fc
+        except Exception:
+            self.bildir("Kamera bileşeni bu sürümde yok; galeriden seçin.", GIDER)
+            return
+        fotolar: list[bytes] = []
+        durum = {"flas": False, "hazir": False, "cekiliyor": False}
+        bilgi = yazi("Kamera açılıyor…", 13, True, renk="white", text_align=ft.TextAlign.CENTER)
+        kam = fc.Camera(expand=True, preview_enabled=True)
+        kucukler = ft.Row(spacing=8, scroll=ft.ScrollMode.AUTO)
+        devam_btn = ft.Container(content=ft.Row([yazi("Devam", 14, True, renk="white"),
+                                                 ft.Icon(ft.Icons.ARROW_FORWARD_ROUNDED, color="white", size=18)],
+                                                spacing=4, tight=True),
+                                 bgcolor=ANA, border_radius=24, padding=ft.Padding(16, 12, 16, 12), visible=False)
+        flas_btn = ft.IconButton(icon=ft.Icons.FLASH_OFF_ROUNDED, icon_color="white", tooltip="Flaş")
+
+        def ui_yenile():
+            devam_btn.visible = bool(fotolar)
+            devam_btn.content.controls[0].value = f"Devam ({len(fotolar)})" if len(fotolar) > 1 else "Devam"
+            kucukler.controls = []
+            for n, b in enumerate(fotolar):
+                kucukler.controls.append(ft.Stack([
+                    ft.Image(src=b, width=48, height=64, border_radius=8),
+                    ft.Container(content=ft.Icon(ft.Icons.CLOSE_ROUNDED, size=12, color="white"), bgcolor="#cc000000",
+                                 width=18, height=18, border_radius=9, right=0, top=0, alignment=ORTA,
+                                 on_click=lambda e, n=n: sil(n))], width=48, height=64))
+            if durum["hazir"]:
+                bilgi.value = ("Fişi çerçeveye sığdırıp çekin" if not fotolar else
+                               f"{len(fotolar)} sayfa çekildi • fişin devamı varsa tekrar çekin")
+            self.guncelle()
+
+        def sil(n):
+            if 0 <= n < len(fotolar):
+                fotolar.pop(n)
+                ui_yenile()
+
+        async def cek(e):
+            if not durum["hazir"] or durum["cekiliyor"]:
+                return
+            durum["cekiliyor"] = True
+            bilgi.value = "Çekiliyor…"
+            self.guncelle()
+            try:
+                veri = await kam.take_picture()
+                if veri:
+                    fotolar.append(bytes(veri) if not isinstance(veri, str) else __import__("base64").b64decode(veri))
+            except Exception as ex:
+                self.bildir(f"Fotoğraf çekilemedi: {ex}", GIDER)
+            durum["cekiliyor"] = False
+            ui_yenile()
+
+        async def flas(e):
+            try:
+                mod = getattr(fc, "FlashMode", None)
+                if mod is None:
+                    return
+                durum["flas"] = not durum["flas"]
+                await kam.set_flash_mode(getattr(mod, "TORCH") if durum["flas"] else getattr(mod, "OFF"))
+                flas_btn.icon = ft.Icons.FLASH_ON_ROUNDED if durum["flas"] else ft.Icons.FLASH_OFF_ROUNDED
+                flas_btn.icon_color = "#fde047" if durum["flas"] else "white"
+                self.guncelle()
+            except Exception as ex:
+                self.bildir(f"Flaş kullanılamıyor: {ex}")
+
+        def kapat(e=None):
+            self._kamera_kapat()
+            self.ekrani_ciz()
+
+        async def galeri(e):
+            self._kamera_kapat()
+            self.ekrani_ciz()
+            if mod == "fatura":
+                await self.fatura_sec("resim")
+            else:
+                await self.fis_sec("resim")
+
+        async def devam(e):
+            if not fotolar:
+                return
+            secilen = list(fotolar)
+            self._kamera_kapat()
+            birlesik = await self.arka(hb.gorselleri_birlestir, secilen)
+            if mod == "fatura":
+                self.ekrani_ciz()
+                await self.fatura_isle(birlesik, "resim")
+            else:
+                await self.fis_isle(birlesik, "resim")
+
+        flas_btn.on_click = flas
+        devam_btn.on_click = devam
+        deklansor = ft.Container(content=ft.Container(bgcolor="white", width=60, height=60, border_radius=30),
+                                 width=76, height=76, border_radius=38, bgcolor="#55ffffff", alignment=ORTA,
+                                 on_click=cek)
+        cerceve = ft.Container(border=ft.Border.all(2, "#ccffffff") if hasattr(ft, "Border") and hasattr(ft.Border, "all")
+                               else ft.border.all(2, "#ccffffff"), border_radius=16, left=24, right=24, top=90, bottom=190)
+        ust_bar = ft.Container(content=ft.Row([
+            ft.IconButton(icon=ft.Icons.CLOSE_ROUNDED, icon_color="white", on_click=kapat, tooltip="Kapat"),
+            ft.Container(content=bilgi, expand=True),
+            flas_btn]), top=0, left=0, right=0, padding=ft.Padding(8, 8, 8, 8), bgcolor="#66000000")
+        alt_bar = ft.Container(content=ft.Column([
+            kucukler,
+            ft.Row([ft.IconButton(icon=ft.Icons.PHOTO_LIBRARY_ROUNDED, icon_color="white", icon_size=28,
+                                  on_click=galeri, tooltip="Galeriden seç"),
+                    deklansor, devam_btn], alignment=ft.MainAxisAlignment.SPACE_AROUND,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER)], spacing=10),
+            bottom=0, left=0, right=0, padding=ft.Padding(12, 10, 12, 24), bgcolor="#88000000")
+
+        self._kamera_acik = True
+        if self.page.navigation_bar:
+            self.page.navigation_bar.visible = False
+        if self.page.floating_action_button:
+            self.page.floating_action_button.visible = False
+        self.govde.content = ft.Container(bgcolor="black", expand=True,
+                                          content=ft.Stack([ft.Container(content=kam, left=0, right=0, top=0, bottom=0),
+                                                           cerceve, ust_bar, alt_bar], expand=True))
+        self.guncelle()
+        try:
+            await asyncio.sleep(0.3)  # önizleme yüzeyi sayfaya yerleşsin
+            kameralar = await kam.get_available_cameras()
+            if not kameralar:
+                raise RuntimeError("Cihazda kamera bulunamadı")
+            arka = next((c for c in kameralar if "back" in str(getattr(c, "lens_direction", "")).lower()), kameralar[0])
+            rp = fc.ResolutionPreset
+            preset = getattr(rp, "VERY_HIGH", None) or getattr(rp, "HIGH", None) or getattr(rp, "MEDIUM")
+            ifg = getattr(getattr(fc, "ImageFormatGroup", None), "JPEG", None)
+            try:
+                await kam.initialize(description=arka, resolution_preset=preset, enable_audio=False,
+                                     image_format_group=ifg)
+            except TypeError:
+                await kam.initialize(arka, preset)
+            durum["hazir"] = True
+            ui_yenile()
+        except Exception as ex:
+            m = str(ex)
+            if "ccess" in m or "ermission" in m or "izin" in m.lower():
+                bilgi.value = "Kamera izni verilmedi. Telefon Ayarları > Uygulamalar > Hane Bütçesi > İzinler'den kameraya izin verin."
+            else:
+                bilgi.value = f"Kamera açılamadı: {m}"
+            self.guncelle()
+
+    def _kamera_kapat(self):
+        self._kamera_acik = False
+        if self.page.navigation_bar:
+            self.page.navigation_bar.visible = True
+        if self.page.floating_action_button:
+            self.page.floating_action_button.visible = self.sekme in (0, 1)
+
+    async def hizli_fis(self, e=None):
+        self.sekmeye_git(3)
+        if self.fis is None:
+            if self.mobil:
+                await self.kamera_ekrani()
+            else:
+                await self.fis_sec("resim")
 
     def islem_detay(self, i):
         tur = i.get("tur")
@@ -611,7 +975,7 @@ class Uygulama:
             ayni = [x for x in self.islemler if x.get("fis_grup") == i.get("fis_grup")]
             satirlar.append(("Fiş", f"{len(ayni)} ürün • {hb.tl(sum(float(x.get('tutar') or 0) for x in ayni))}"))
 
-        icerik = ft.Column([ft.Row([yazi(k, 12, renk=SOLUK, width=110), yazi(str(v), 13, expand=True)])
+        icerik = ft.Column([ft.Row([yazi(k, 12, renk=ui.SOLUK, width=110), yazi(str(v), 13, expand=True)])
                             for k, v in satirlar if v not in (None, "")], tight=True, spacing=6,
                            scroll=ft.ScrollMode.AUTO)
         d = ft.AlertDialog(title=yazi("İşlem detayı", 17, True), content=icerik)
@@ -678,36 +1042,67 @@ class Uygulama:
         self.dialog_ac(d)
 
     # ------------------------------------------------------------ 2) EKLE / DÜZENLE
-    def ekle_ekrani(self, duzenlenen=None, tur=None):
+
+    def ekle_ekrani(self, duzenlenen=None, tur=None, onceki=None):
         d = duzenlenen or {}
+        onceki = onceki or {}
         tur = tur or d.get("tur") or "Gider"
         ben = self.ben["id"]
         kisiler = list(self.profiller.values())
+        tur_renk = {"Gider": GIDER, "Gelir": GELIR, "Aktarım": AKTARIM}[tur]
 
-        tutar = ft.TextField(label="Tutar (₺)", value=(f"{float(d['tutar']):.2f}".replace(".", ",") if d.get("tutar") else ""),
-                             keyboard_type=ft.KeyboardType.NUMBER, autofocus=not d, text_size=22)
-        tarih = ft.TextField(label="Tarih (GG.AA.YYYY SS:DD)",
-                             value=hb.tarih_goster(d.get("tarih")) if d else hb.simdi().strftime("%d.%m.%Y %H:%M"))
-        aciklama = ft.TextField(label="Not (isteğe bağlı)", value=d.get("aciklama") or "")
+        tutar_deger = onceki.get("tutar") or (f"{float(d['tutar']):.2f}".replace(".", ",") if d.get("tutar") else "")
+        tutar = ft.TextField(value=tutar_deger, hint_text="0,00", keyboard_type=ft.KeyboardType.NUMBER,
+                             autofocus=not d, text_size=34, text_align=ft.TextAlign.CENTER, border_color="transparent",
+                             suffix_text="₺", text_style=ft.TextStyle(weight=ft.FontWeight.BOLD, color=tur_renk))
+        tarih = ft.TextField(label="Tarih (GG.AA.YYYY SS:DD)", prefix_icon=ft.Icons.EVENT_ROUNDED, dense=True,
+                             value=onceki.get("tarih") or (hb.tarih_goster(d.get("tarih")) if d
+                                                           else hb.simdi().strftime("%d.%m.%Y %H:%M")))
+        aciklama = ft.TextField(label="Not (isteğe bağlı)", value=d.get("aciklama") or "", dense=True,
+                                prefix_icon=ft.Icons.NOTES_ROUNDED)
         firma = ft.TextField(label="Firma / Market" if tur == "Gider" else "Kaynak (işveren, kişi...)",
-                             value=d.get("firma") or "")
-        urun = ft.TextField(label="Ürün / Hizmet" if tur == "Gider" else "Açıklama", value=d.get("urun") or "")
-        miktar = ft.TextField(label="Miktar (örn: 2 adet, 1.5 kg)", value=d.get("miktar") or "")
-        if tur == "Gider":
-            kategori = acilir("Kategori", self.kategoriler, d.get("kategori") or "Market & Temel Gıda")
-        else:
-            kategori = acilir("Gelir türü", self.gelir_turleri, d.get("kategori") or self.gelir_turleri[0])
+                             value=d.get("firma") or "", dense=True, prefix_icon=ft.Icons.STOREFRONT_ROUNDED)
+        urun = ft.TextField(label="Ürün / Hizmet" if tur == "Gider" else "Açıklama", value=d.get("urun") or "",
+                            dense=True, prefix_icon=ft.Icons.SHOPPING_BASKET_ROUNDED)
+        miktar = ft.TextField(label="Miktar (örn: 2 adet, 1.5 kg)", value=d.get("miktar") or "", dense=True,
+                              prefix_icon=ft.Icons.SCALE_ROUNDED)
 
-        varsayilan_kasa = d.get("kasa_sahibi") or ben
-        kasa = ft.RadioGroup(value=varsayilan_kasa, content=ft.Row(
-            [ft.Radio(value=p["id"], label=p["ad"]) for p in kisiler], wrap=True))
+        secim = {"kategori": d.get("kategori") if d.get("tur") == tur and d.get("kategori") else
+                 ("Market & Temel Gıda" if tur == "Gider" else self.gelir_turleri[0]),
+                 "kasa": d.get("kasa_sahibi") or ben}
+        kat_kutusu = ft.Row(wrap=True, spacing=6, run_spacing=6)
+        kasa_kutusu = ft.Row(wrap=True, spacing=6)
+        secenekler = self.kategoriler if tur == "Gider" else self.gelir_turleri
+        if secim["kategori"] not in secenekler:
+            secenekler = secenekler + [secim["kategori"]]
 
-        def tur_degisti(e):
-            self.govde.content = self.ekle_ekrani(duzenlenen=duzenlenen, tur=e.control.value)
+        def ciz_secimler():
+            kat_kutusu.controls = [cip(k, secim["kategori"] == k, lambda e, k=k: sec("kategori", k),
+                                       kat_stil(k, tur)[1], kat_stil(k, tur)[0]) for k in secenekler]
+            kasa_kutusu.controls = [cip(p["ad"], secim["kasa"] == p["id"], lambda e, i=p["id"]: sec("kasa", i), "#475569",
+                                        ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED) for p in kisiler]
+
+        def sec(alan, deger):
+            secim[alan] = deger
+            ciz_secimler()
             self.guncelle()
 
-        tur_sec = ft.RadioGroup(value=tur, on_change=tur_degisti, content=ft.Row(
-            [ft.Radio(value=t, label=t) for t in ("Gider", "Gelir", "Aktarım")], wrap=True))
+        ciz_secimler()
+
+        def tur_degistir(t):
+            self.govde.content = self.ekle_ekrani(duzenlenen=duzenlenen, tur=t,
+                                                  onceki={"tutar": tutar.value, "tarih": tarih.value})
+            self.guncelle()
+
+        tur_sec = ft.Container(content=ft.Row([
+            ft.Container(content=ft.Row([ft.Icon(sim, size=16, color="white" if t == tur else r), yazi(t, 13, True,
+                                         renk="white" if t == tur else ui.YAZI)], spacing=4, tight=True,
+                                        alignment=ft.MainAxisAlignment.CENTER),
+                         bgcolor=r if t == tur else None, border_radius=12, padding=10, expand=True,
+                         on_click=lambda e, t=t: tur_degistir(t), alignment=ORTA)
+            for t, r, sim in (("Gider", GIDER, ft.Icons.NORTH_EAST_ROUNDED), ("Gelir", GELIR, ft.Icons.SOUTH_WEST_ROUNDED),
+                              ("Aktarım", AKTARIM, ft.Icons.SWAP_HORIZ_ROUNDED))], spacing=4),
+            bgcolor=ui.CIZGI, border_radius=14, padding=4)
 
         hata = yazi("", 12, renk=GIDER)
         kaydet_btn = None
@@ -719,7 +1114,7 @@ class Uygulama:
                 hata.value = "Geçerli bir tutar girin."
                 self.guncelle()
                 return
-            sahip = kasa.value if self.yonetici else ben
+            sahip = secim["kasa"] if self.yonetici else ben
             kayit = {"tur": tur, "tutar": t, "tarih": hb.iso_tarih(hb.tarih_coz(tarih.value)),
                      "aciklama": aciklama.value.strip() or None, "kasa_sahibi": sahip}
             if self.yonetici:
@@ -733,7 +1128,7 @@ class Uygulama:
                 kayit.update({"hedef_kasa": hedef, "kategori": "Transfer / Birikim",
                               "firma": None, "urun": None, "miktar": None})
             else:
-                kayit.update({"hedef_kasa": None, "kategori": kategori.value, "firma": firma.value.strip() or None,
+                kayit.update({"hedef_kasa": None, "kategori": secim["kategori"], "firma": firma.value.strip() or None,
                               "urun": urun.value.strip() or None,
                               "miktar": (miktar.value.strip() or None) if tur == "Gider" else None})
             kaydet_btn.disabled = True
@@ -752,59 +1147,82 @@ class Uygulama:
                 hata.value = f"Kaydedilemedi: {ex}"
                 self.guncelle()
 
-        kaydet_btn = buton("Güncelle" if d.get("id") else "Kaydet", kaydet, ft.Icons.CHECK, expand=True)
+        kaydet_btn = buton("Güncelle" if d.get("id") else "Kaydet", kaydet, ft.Icons.CHECK_ROUNDED, expand=True,
+                           height=50)
 
-        alanlar = [yazi("Kaydı düzenle" if d.get("id") else "Yeni kayıt", 20, True)]
+        ust = [yazi("Kaydı düzenle" if d.get("id") else "Yeni kayıt", 22, True)]
         if not d.get("id"):
-            alanlar.append(tur_sec)
-        alanlar.append(tutar)
+            ust.append(tur_sec)
+        ust.append(ft.Container(content=ft.Column([yazi("Tutar", 12, renk=ui.SOLUK), tutar], spacing=0,
+                                                  horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                                bgcolor=ui.KART, border_radius=20, padding=12, shadow=golge(0.6)))
+        alanlar = []
         if tur == "Aktarım":
             if self.yonetici:
-                alanlar += [yazi("Gönderen kasa (diğerine aktarılır):", 12, renk=SOLUK), kasa]
+                alanlar += [yazi("Gönderen kasa (diğerine aktarılır)", 12, renk=ui.SOLUK), kasa_kutusu]
             else:
                 diger = self.diger
-                alanlar.append(kart(yazi(f"{self.ben['ad']} kasasından ➜ {diger['ad'] if diger else '?'} kasasına",
-                                         13, True, renk=AKTARIM), renk="#dbeafe"))
+                alanlar.append(ft.Container(content=ft.Row([
+                    ft.Icon(ft.Icons.SWAP_HORIZ_ROUNDED, color=AKTARIM),
+                    yazi(f"{self.ben['ad']} kasasından ➜ {diger['ad'] if diger else '?'} kasasına", 13, True,
+                         renk=AKTARIM, expand=True)]), bgcolor=ui.BILGI_ZEMIN, border_radius=12, padding=12))
             alanlar += [aciklama, tarih]
         else:
-            alanlar += [kategori, firma, urun]
+            alanlar += [yazi("Kategori" if tur == "Gider" else "Gelir türü", 12, renk=ui.SOLUK), kat_kutusu,
+                        ft.Container(height=4), firma, urun]
             if tur == "Gider":
                 alanlar.append(miktar)
             if self.yonetici:
-                alanlar += [yazi("Hangi kasa?", 12, renk=SOLUK), kasa]
+                alanlar += [yazi("Hangi kasa?", 12, renk=ui.SOLUK), kasa_kutusu]
             alanlar += [tarih, aciklama]
         if self.yonetici:
             alanlar.append(gizli_cb)
-        alanlar += [hata, ft.Row([kaydet_btn])]
+        alanlar += [hata]
+        alt = [ft.Row([kaydet_btn])]
         if d.get("id"):
-            alanlar.append(ft.Row([buton("Vazgeç", lambda e: self.sekmeye_git(1), tip="text")]))
-        return ft.ListView(padding=14, expand=True, controls=[kart(ft.Column(alanlar, spacing=12))])
+            alt.append(ft.Row([buton("Vazgeç", lambda e: self.sekmeye_git(1), tip="text")]))
+        return ft.ListView(padding=16, spacing=12, expand=True, controls=ust + [
+            kart(ft.Column(alanlar, spacing=10), dolgu=16, shadow=golge(0.6))] + alt + [ft.Container(height=20)])
 
-    # ------------------------------------------------------------ 3) FİŞ TARA
     def fis_ekrani(self):
         f = self.fis
         if f is None:
-            return ft.ListView(padding=14, spacing=12, expand=True, controls=[
-                yazi("Fiş / Fatura Ekle", 20, True),
-                kart(ft.Column([
-                    ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME, color=ANA), yazi("Yapay zeka ile otomatik okuma", 14, True)]),
-                    yazi("Fişin fotoğrafını seçin. Ürünler, fiyatlar ve kategoriler otomatik çıkarılır; "
-                         "kaydetmeden önce düzeltebilirsiniz. Görsel buluta kaydedilir.", 12, renk=SOLUK),
-                    buton("Galeriden fiş fotoğrafı seç", lambda e: self.page.run_task(self.fis_sec, "resim"),
-                          ft.Icons.PHOTO_LIBRARY, expand=True),
-                    buton("PDF fatura seç", lambda e: self.page.run_task(self.fis_sec, "pdf"),
-                          ft.Icons.PICTURE_AS_PDF, tip="outlined", expand=True),
-                    yazi("İpucu: Önce telefonun kamerasıyla fişi düz ve aydınlık şekilde çekin.", 11, renk=SOLUK),
-                ], spacing=10)),
-                *([] if self.gemini_anahtari else [kart(yazi(
-                    "⚠️ Gemini API anahtarı ayarlı değil. " +
-                    ("Ayarlar sekmesinden ekleyin." if self.yonetici else "Abdurrahman'ın Ayarlar'dan eklemesi gerekiyor."),
-                    12, renk=GIDER), renk="#fee2e2")]),
+            secenekler = []
+            if self.mobil:
+                secenekler.append(self._buyuk_secenek(ft.Icons.PHOTO_CAMERA_ROUNDED, "Kamerayla çek",
+                                                      "Uzun fişlerde birden çok fotoğraf çekebilirsiniz",
+                                                      lambda e: self.page.run_task(self.kamera_ekrani), ANA, True))
+            secenekler += [
+                self._buyuk_secenek(ft.Icons.PHOTO_LIBRARY_ROUNDED, "Galeriden seç", "Daha önce çekilmiş fiş fotoğrafı",
+                                    lambda e: self.page.run_task(self.fis_sec, "resim"), "#6366f1"),
+                self._buyuk_secenek(ft.Icons.PICTURE_AS_PDF_ROUNDED, "PDF fatura", "e-Fatura, e-Arşiv, banka dekontu",
+                                    lambda e: self.page.run_task(self.fis_sec, "pdf"), "#e11d48"),
+            ]
+            uyari = [] if self.gemini_anahtari else [kart(ft.Row([
+                ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=GIDER),
+                yazi("Yapay zeka anahtarı ayarlı değil. " + ("Ayarlar sekmesinden ekleyin." if self.yonetici
+                     else "Abdurrahman'ın Ayarlar'dan eklemesi gerekiyor."), 12, renk=GIDER, expand=True)]),
+                renk=ui.UYARI_ZEMIN)]
+            return ft.ListView(padding=16, spacing=12, expand=True, controls=[
+                ft.Container(content=ft.Column([
+                    ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME_ROUNDED, color="white"), yazi("Akıllı Fiş Okuma", 20, True, renk="white")]),
+                    yazi("Fişin fotoğrafını çekin; ürünler, fiyatlar ve kategoriler yapay zeka ile otomatik "
+                         "çıkarılır. Kaydetmeden önce kontrol edip düzeltebilirsiniz.", 12.5, renk="#e0e7ff"),
+                ], spacing=8), padding=20, border_radius=24, gradient=degrade(["#4f46e5", "#7c3aed", "#a855f7"]),
+                    bgcolor="#6366f1", shadow=golge(1)),
+                *uyari, *secenekler,
+                kart(ft.Column([yazi("İyi sonuç için", 13, True),
+                                *[ft.Row([ft.Icon(ft.Icons.CHECK_CIRCLE_ROUNDED, size=16, color=GELIR), yazi(t, 12, renk=ui.SOLUK, expand=True)])
+                                  for t in ("Fişi düz bir zemine koyun, gölge düşürmeyin",
+                                            "Yazıların tamamı kadrajda ve net olsun",
+                                            "Uzun fişi parça parça çekin, uygulama birleştirir")]], spacing=6)),
             ])
         if f.get("durum") == "isleniyor":
-            return ft.Column([ft.ProgressRing(), yazi(f.get("mesaj", "İşleniyor..."), 14, renk=SOLUK)],
-                             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                             alignment=ft.MainAxisAlignment.CENTER, expand=True)
+            return ft.Column([
+                ft.Container(content=ft.ProgressRing(width=56, height=56, stroke_width=5, color="#7c3aed"), padding=10),
+                yazi(f.get("mesaj", "İşleniyor..."), 15, True),
+                yazi("Bu işlem 5-20 saniye sürebilir", 12, renk=ui.SOLUK)],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER, expand=True)
         return self._fis_duzenleyici()
 
     async def fis_sec(self, tip):
@@ -867,7 +1285,7 @@ class Uygulama:
             return await self.arka(hb.fis_analiz_et, hazir, mime, self.gemini_anahtari, self.kategoriler,
                                    self.eslemeler)
 
-        yol_s, analiz_s = await asyncio.gather(yukle(), analiz(), return_exceptions=True)
+        yol_s, analiz_s, _ = await asyncio.gather(yukle(), analiz(), self.fiyat_verisi_yukle(), return_exceptions=True)
         uyari = []
         if isinstance(yol_s, Exception):
             uyari.append(f"Görsel yüklenemedi: {yol_s}")
@@ -901,7 +1319,7 @@ class Uygulama:
             if f.get("toplam") and abs(t - float(f["toplam"])) > 0.05:
                 fark = f"  (fiş toplamı {hb.tl(f['toplam'])})"
             toplam_y.value = f"Toplam: {hb.tl(t)}{fark}"
-            toplam_y.color = GIDER if fark else YAZI
+            toplam_y.color = GIDER if fark else ui.YAZI
             if e is not None:
                 self.guncelle()
 
@@ -913,7 +1331,7 @@ class Uygulama:
             kat_dd = acilir("Kategori", self.kategoriler,
                             u.get("kategori") if u.get("kategori") in self.kategoriler else "Diğer", expand=True)
             kayit = [urun_tf, tutar_tf, kat_dd, u.get("miktar"), u.get("birim_fiyat"), u.get("ai_kategori")]
-            kutu = kart(None, dolgu=8, renk="#f8fafc")
+            kutu = kart(None, dolgu=8, renk=ui.ZEMIN2)
 
             def kaldir(e):
                 satirlar.remove(kayit)
@@ -925,7 +1343,10 @@ class Uygulama:
                 ft.Row([ft.Container(content=urun_tf, expand=True),
                         ft.IconButton(icon=ft.Icons.CLOSE, icon_size=18, on_click=kaldir, tooltip="Satırı sil")]),
                 ft.Row([tutar_tf, kat_dd], spacing=8),
-                *([yazi(f"Miktar: {u['miktar']}", 11, renk=SOLUK)] if u.get("miktar") else []),
+                *([yazi(f"Miktar: {u['miktar']}", 11, renk=ui.SOLUK)] if u.get("miktar") else []),
+                *([ft.Row([ft.Icon(ft.Icons.PRICE_CHECK_ROUNDED, size=14, color="#0891b2"), yazi(fo, 11, renk="#0891b2", expand=True)],
+                          spacing=4)] if (fo := (ak.fiyat_ozeti(self.fiyat_verisi, u.get("urun") or "", u.get("birim_fiyat") or u.get("tutar"))
+                                                 if self.fiyat_verisi and u.get("urun") else None)) else []),
             ], spacing=6)
             satirlar.append(kayit)
             satir_kutusu.controls.append(kutu)
@@ -977,6 +1398,8 @@ class Uygulama:
                     except Exception as ex:
                         print("Eşleme kaydedilemedi:", ex)
                 self.fis = None
+                self.fiyat_verisi = None
+                self.page.run_task(self.alisverisi_isaretle, [k["urun"] for k in kayitlar])
                 self.bildir(f"Fiş kaydedildi ✓ {len(kayitlar)} ürün • "
                             f"{hb.tl(sum(k['tutar'] for k in kayitlar))}", GELIR)
                 await self.verileri_yenile(ciz=False)
@@ -986,15 +1409,15 @@ class Uygulama:
 
         bilgi = []
         for u in f.get("uyari") or []:
-            bilgi.append(kart(yazi("⚠️ " + u, 12, renk=GIDER), renk="#fee2e2", dolgu=10))
+            bilgi.append(kart(yazi("⚠️ " + u, 12, renk=GIDER), renk=ui.UYARI_ZEMIN, dolgu=10))
         alt_bilgi = " • ".join(x for x in [f"Model: {f['model']}" if f.get("model") else "",
                                             f"Fiş toplamı: {hb.tl(f['toplam'])}" if f.get("toplam") else ""] if x)
         ust_kontroller = [ft.Row([yazi("Fişi kontrol et", 20, True, expand=True),
                                   *([buton("Görsel", lambda e: self.page.run_task(self.fis_gorseli_goster, f["yol"]),
                                            ft.Icons.IMAGE, tip="text")] if f.get("yol") else [])]),
                           *bilgi, kart(ft.Column([firma, tarih] + (
-                              [yazi("Hangi kasadan ödendi?", 12, renk=SOLUK), kasa, gizli_cb] if self.yonetici else []) +
-                              ([yazi(alt_bilgi, 11, renk=SOLUK)] if alt_bilgi else []), spacing=10))]
+                              [yazi("Hangi kasadan ödendi?", 12, renk=ui.SOLUK), kasa, gizli_cb] if self.yonetici else []) +
+                              ([yazi(alt_bilgi, 11, renk=ui.SOLUK)] if alt_bilgi else []), spacing=10))]
         return ft.ListView(padding=14, spacing=10, expand=True, controls=ust_kontroller + [
             satir_kutusu,
             buton("Satır ekle", yeni_satir, ft.Icons.ADD, tip="outlined"),
@@ -1005,14 +1428,14 @@ class Uygulama:
     # ------------------------------------------------------------ 4) AYARLAR
     def ayarlar_ekrani(self):
         canli = self.canli and self.canli.bagli
-        kontroller = [yazi("Ayarlar", 20, True), kart(ft.Column([
+        kontroller = [kart(ft.Column([
             ft.Row([ft.Icon(ft.Icons.ACCOUNT_CIRCLE, size=40, color=ANA),
                     ft.Column([yazi(self.ben["ad"], 16, True),
                                yazi("Yönetici – tüm kasaları görür" if self.yonetici else "Üye – kendi kasasını görür",
-                                    12, renk=SOLUK)], spacing=0)]),
+                                    12, renk=ui.SOLUK)], spacing=0)]),
             ft.Row([ft.Icon(ft.Icons.CIRCLE, size=10, color=GELIR if canli else "#94a3b8"),
                     yazi("Anlık senkronizasyon açık" if canli else "Anlık bağlantı kuruluyor (20 sn'de bir yenileniyor)",
-                         12, renk=SOLUK)]),
+                         12, renk=ui.SOLUK)]),
         ], spacing=10))]
 
         if self.yonetici:
@@ -1040,7 +1463,7 @@ class Uygulama:
                 yazi("Gizlilik", 14, True),
                 yazi("Hatice sizin kasanızı hiç göremez. 'Gizli' işaretlediğiniz kayıtlar (Hatice'nin kasasına "
                      "yazılan veya ona yapılan aktarım dahil) da Hatice'ye gösterilmez; kasa toplamı yine doğru "
-                     "hesaplanır. Bu seçenek yalnızca sizde vardır.", 11, renk=SOLUK),
+                     "hesaplanır. Bu seçenek yalnızca sizde vardır.", 11, renk=ui.SOLUK),
                 ft.Checkbox(label="Yeni kayıtlarımı varsayılan olarak Hatice'den gizle",
                             value=self.gizli_varsayilan, on_change=gizli_degisti),
             ], spacing=8)))
@@ -1063,10 +1486,10 @@ class Uygulama:
 
             kontroller += [
                 kart(ft.Column([yazi("Yapay zeka (fiş okuma)", 14, True),
-                                yazi("aistudio.google.com adresinden ücretsiz alınabilir.", 11, renk=SOLUK),
+                                yazi("aistudio.google.com adresinden ücretsiz alınabilir.", 11, renk=ui.SOLUK),
                                 anahtar, buton("Anahtarı kaydet", anahtar_kaydet, ft.Icons.KEY)], spacing=10)),
                 kart(ft.Column([yazi(f"Kategoriler ({len(self.kategoriler)})", 14, True),
-                                yazi(", ".join(self.kategoriler), 11, renk=SOLUK),
+                                yazi(", ".join(self.kategoriler), 11, renk=ui.SOLUK),
                                 ft.Row([ft.Container(content=yeni_kat, expand=True),
                                         ft.IconButton(icon=ft.Icons.ADD, on_click=kat_ekle)])], spacing=10)),
             ]
@@ -1098,11 +1521,13 @@ class Uygulama:
                 self.canli.durdur()
             await self.arka(self.supa.cikis)
             self.ben, self.islemler, self.bakiyeler, self.fis = None, [], [], None
+            self.ek_varsayilan()
             self.giris_ekrani()
 
+        kontroller.insert(1, self.tema_pin_karti())
         kontroller += [buton("Verileri yenile", yenile, ft.Icons.REFRESH, tip="outlined"),
                        buton("Çıkış yap", cikis, ft.Icons.LOGOUT, tip="outlined"),
-                       ft.Row([yazi(f"Hane Bütçesi {SURUM}", 11, renk=SOLUK)], alignment=ft.MainAxisAlignment.CENTER)]
+                       ft.Row([yazi(f"Hane Bütçesi {SURUM}", 11, renk=ui.SOLUK)], alignment=ft.MainAxisAlignment.CENTER)]
         return ft.ListView(padding=14, spacing=12, expand=True, controls=kontroller)
 
 
