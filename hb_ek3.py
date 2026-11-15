@@ -30,6 +30,9 @@ class EkOzellikler3:
         self.varliklar = []
         self.yil = hb.simdi().year
         self.konum = None
+        self.aktuel = []
+        self.aktuel_durum = {"calisiyor": False, "son": None, "hata": None}
+        self.kuyumcu_farki = None
 
     # ================================================================== yerel dosyalar
     def _yerel_yol(self, ad):
@@ -232,7 +235,7 @@ class EkOzellikler3:
 
     def sayfa_varliklar(self):
         kutu = ft.Column(spacing=10)
-        durum = {"kur": None, "hata": None}
+        durum = {"kur": None, "ham": None, "hata": None}
 
         def ciz():
             kur = durum["kur"] or {}
@@ -282,7 +285,24 @@ class EkOzellikler3:
                 bilgi.append(kart(yazi(f"Güncel kurlar alınamadı ({durum['hata']}); değerler gösterilemiyor.", 12, renk=GIDER),
                                   renk=ui.UYARI_ZEMIN))
             kur_satir = [yazi(f"{ak.VARLIK_TURLERI[k][0]}: {hb.tl(v['alis'])}", 11, renk=ui.SOLUK)
-                         for k, v in list(kur.items())[:6]]
+                         for k, v in kur.items() if k in ak.VARLIK_TURLERI][:8]
+            f = self.kuyumcu_farki or {}
+            kaynak = next((v.get("kaynak") for v in kur.values() if v.get("kaynak")), "")
+            if f:
+                kaynak_metni = (f"Altın: {kaynak} fiyatı Erzurum kuyumcu fiyatına göre düzeltildi "
+                                f"({f.get('_tarih', '')} tarihinde eşitlendi). Döviz: {kaynak}.")
+            else:
+                kaynak_metni = (f"Kaynak: {kaynak or '—'} (Erzurum Kuyumcular Odası uygulaması da Harem Altın fiyatını baz alır). "
+                                "Kuyumcu fiyatıyla birebir için “Erzurum fiyatıyla eşitle”.")
+            esitle = ft.Container(content=ft.Row([
+                ft.Icon(ft.Icons.STOREFRONT_ROUNDED, color="#a16207"),
+                ft.Column([yazi("Erzurum fiyatıyla eşitle", 13.5, True),
+                           yazi("Oda uygulamasındaki gram ve çeyrek fiyatını bir kez girin" if not f
+                                else f"Son eşitleme: {f.get('_tarih', '')} – yenilemek için dokunun", 11, renk=ui.SOLUK)],
+                          spacing=0, expand=True),
+                ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.SOLUK)], spacing=10),
+                bgcolor=ui.KART, border_radius=16, padding=12, shadow=golge(0.4),
+                on_click=lambda e: self.kuyumcu_esitle(durum.get("ham") or {}))
             kutu.controls = [ust, *bilgi,
                              ft.Row([buton("Mevcut varlığımı ekle", lambda e: self.varlik_ekle(None, False), ft.Icons.INVENTORY_2_ROUNDED,
                                            tip="outlined", expand=True),
@@ -292,14 +312,16 @@ class EkOzellikler3:
                              *([kart(yazi("Henüz varlık yok. Elinizdeki altın/dövizi “Mevcut varlığımı ekle” ile girin; kasadan düşmez. "
                                           "Yeni aldıklarınızı “Yeni aldım” ile girin; kasadan gider olarak düşer.", 12.5, renk=ui.SOLUK))]
                                if not kartlar else []),
+                             esitle,
                              ft.Row(kur_satir, wrap=True, spacing=10),
-                             yazi("Kurlar: finans.truncgil.com serbest piyasa alış fiyatı (yaklaşık; kuyumcuya göre değişir).", 10.5,
-                                  renk=ui.SOLUK)]
+                             yazi(kaynak_metni, 10.5, renk=ui.SOLUK)]
 
         async def yukle():
             await self.varliklari_yukle()
+            await self.kuyumcu_farki_yukle()
             try:
-                durum["kur"] = await self.arka(ak.kurlar)
+                durum["ham"] = await self.arka(ak.kurlar)
+                durum["kur"] = ak.yerel_kurlar(durum["ham"], self.kuyumcu_farki)
                 if not durum["kur"]:
                     durum["hata"] = "kaynak yanıt vermedi"
             except Exception as e:
@@ -519,6 +541,16 @@ class EkOzellikler3:
             satirlar.append(ft.Row([yazi(u["madde"], 12.5, True, width=90),
                                     yazi(f"{b['market']}: {b['urun'][:40]}" if b else "bulunamadı", 11.5, renk=ui.SOLUK, expand=True),
                                     yazi(hb.tl(b["fiyat"]) if b else "", 12.5, True)]))
+        aktuel_satir = []
+        for m in maddeler:
+            es = ak.aktuel_eslestir(self.aktuel, m, 0.6)
+            if es:
+                b = es[0]
+                aktuel_satir.append(ft.Row([yazi(m, 12.5, True, width=90),
+                                            yazi(f"{b['market']} aktüel: {b['urun'][:40]}", 11.5, renk=GELIR, expand=True),
+                                            yazi(hb.tl(b["fiyat"]), 12.5, True, renk=GELIR)]))
+        if aktuel_satir:
+            satirlar += [ft.Divider(), yazi("🏷️ Bu hafta aktüelde olanlar", 13, True, renk=GELIR), *aktuel_satir]
         satirlar.append(yazi("Fiyatlar yakınınızdaki şubelerden; ürün eşleşmesi yaklaşık olabilir.", 10.5, renk=ui.SOLUK))
         self.dialog_ac(ft.AlertDialog(title=yazi("Listeyi en ucuza tamamla", 17, True),
                                       content=ft.Column(satirlar, tight=True, scroll=ft.ScrollMode.AUTO, spacing=6),
@@ -820,3 +852,214 @@ class EkOzellikler3:
         if eklenen:
             self.bildir(f"🎒 {eklenen} günlük okul harçlığı otomatik eklendi")
             await self.verileri_yenile()
+        await self.aktuel_yukle()
+        await self.aktuel_yenile()
+
+
+    # ================================================================== Erzurum kuyumcu fiyatı
+    async def kuyumcu_farki_yukle(self):
+        if self.kuyumcu_farki is not None:
+            return self.kuyumcu_farki
+        f = None
+        try:
+            k = await self.arka(self.supa.ayar_oku, "kuyumcu_farki")
+            f = json.loads(k) if k else None
+        except Exception:
+            pass
+        self.kuyumcu_farki = f or self._yerel_oku("kuyumcu_farki") or {}
+        return self.kuyumcu_farki
+
+    def kuyumcu_esitle(self, ham: dict):
+        if not ham:
+            self.bildir("Güncel fiyatlar alınamadı; internet bağlantısını kontrol edin.", GIDER)
+            return
+        alanlar, satirlar = {}, []
+        for tur in ("gram", "ceyrek", "yarim", "tam", "ata", "bilezik22"):
+            if tur not in ham:
+                continue
+            ad = ak.VARLIK_TURLERI[tur][0]
+            a = ft.TextField(label="Alış", dense=True, expand=True, keyboard_type=ft.KeyboardType.NUMBER,
+                             hint_text=f"{ham[tur]['alis']:.0f}")
+            st = ft.TextField(label="Satış", dense=True, expand=True, keyboard_type=ft.KeyboardType.NUMBER,
+                              hint_text=f"{ham[tur]['satis']:.0f}")
+            alanlar[tur] = (a, st)
+            satirlar += [yazi(ad + ("" if tur in ("gram", "ceyrek") else " (isteğe bağlı)"), 12.5, True), ft.Row([a, st], spacing=8)]
+
+        async def kaydet():
+            f = {}
+            for tur, (a, st) in alanlar.items():
+                ga, gs = hb.tutar_coz(a.value), hb.tutar_coz(st.value)
+                if not ga and not gs:
+                    continue
+                f[tur] = {"alis_oran": round((ga or gs) / ham[tur]["alis"], 5),
+                          "satis_oran": round((gs or ga) / ham[tur]["satis"], 5)}
+            if not f:
+                self.bildir("En az bir fiyat girin (gram veya çeyrek alış).", GIDER)
+                return False
+            f["_tarih"] = hb.simdi().strftime("%d.%m.%Y")
+            self.kuyumcu_farki = f
+            self._yerel_yaz("kuyumcu_farki", f)
+            try:
+                await self.arka(self.supa.ayar_yaz, "kuyumcu_farki", json.dumps(f))
+            except Exception as e:
+                print("Kuyumcu farkı buluta yazılamadı (yalnız bu telefonda):", e)
+            self.bildir("Erzurum fiyatına eşitlendi ✓ Değerler bundan sonra buna göre hesaplanır", GELIR)
+            self.ekrani_ciz()
+
+        def sifirla(d):
+            async def sil(e):
+                self.kuyumcu_farki = {}
+                self._yerel_yaz("kuyumcu_farki", {})
+                try:
+                    await self.arka(self.supa.ayar_yaz, "kuyumcu_farki", "{}")
+                except Exception:
+                    pass
+                self.dialog_kapat(d)
+                self.ekrani_ciz()
+            return buton("Sıfırla", sil, tip="text")
+
+        self._girdi_dialog("Erzurum fiyatıyla eşitle", [
+            yazi("Erzurum Kuyumcular Odası uygulamasında gördüğünüz fiyatları yazın. Kutulardaki soluk sayılar şu anki Harem "
+                 "Altın fiyatıdır. Uygulama aradaki farkı öğrenir; fiyat değiştikçe değeriniz Erzurum fiyatına göre güncellenir. "
+                 "Girmediğiniz sikkeler çeyreğin, bilezik gramın farkını kullanır.", 11.5, renk=ui.SOLUK), *satirlar],
+            kaydet, "Eşitle", ek_eylem=sifirla if self.kuyumcu_farki else None)
+
+    # ================================================================== aktüel kataloglar
+    async def aktuel_yukle(self):
+        try:
+            self.aktuel = await self.arka(self.supa.tablo, "hb_aktuel",
+                                          f"select=*&bit=gte.{hb.simdi().date().isoformat()}&order=fiyat&limit=3000")
+            son = await self.arka(self.supa.tablo, "hb_aktuel", "select=olusturma&order=olusturma.desc&limit=1")
+            self.aktuel_durum["son"] = son[0]["olusturma"] if son else None
+        except Exception as e:
+            print("Aktüel okunamadı:", e)
+
+    async def aktuel_yenile(self, zorla=False):
+        """Marketlerin aktüel kataloglarını internette bulur (günde en çok bir kez, iki telefon ortak)."""
+        d = self.aktuel_durum
+        if d["calisiyor"] or not self.gemini_anahtari:
+            if zorla and not self.gemini_anahtari:
+                self.bildir("Aktüel taraması için Menü > Ayarlar'da Gemini anahtarı gerekli.", GIDER)
+            return
+        if not zorla and d["son"] and (hb.simdi() - hb.tarih_yerel(d["son"])).total_seconds() < 20 * 3600:
+            return
+        d.update(calisiyor=True, hata=None)
+        if zorla:
+            self.bildir("🔎 Marketlerin aktüel katalogları internette aranıyor…")
+            self.ekrani_ciz()
+        toplam, hatalar = 0, []
+        for market in ak.AKTUEL_MARKETLER:
+            try:
+                bulunan = await self.arka(ak.aktuel_bul, self.gemini_anahtari, market)
+            except Exception as e:
+                hatalar.append(f"{market}: {e}")
+                continue
+            tekil = {}
+            for u in bulunan:
+                u["urun"] = " ".join(u["urun"].split())
+                tekil[(u["market"], u["urun"].lower(), u["bas"])] = u
+            if tekil:
+                try:
+                    await self.arka(self.supa.aktuel_ekle, list(tekil.values()))
+                    toplam += len(tekil)
+                except Exception as e:
+                    hatalar.append(f"{market}: {e}")
+        try:
+            await self.arka(self.supa.rpc, "hb_aktuel_temizle", {})
+        except Exception:
+            pass
+        d.update(calisiyor=False, hata="; ".join(hatalar)[:300] if hatalar and not toplam else None)
+        await self.aktuel_yukle()
+        await self.aktuel_liste_duyur()
+        if zorla:
+            self.bildir(f"✓ {toplam} aktüel ürün bulundu" if toplam else f"Aktüel bulunamadı: {d['hata'] or 'sonuç yok'}",
+                        GELIR if toplam else GIDER)
+        self.ekrani_ciz()
+
+    async def aktuel_liste_duyur(self):
+        """Listede bekleyen ürün bir markette aktüelse ikinize (bir kez) bildirim gönderir."""
+        for a in [x for x in self.ek.get("alisveris", []) if not x.get("alindi")]:
+            es = ak.aktuel_eslestir(self.aktuel, a["urun"], 0.6)
+            if not es:
+                continue
+            b = es[0]
+            bit = dt.date.fromisoformat(b["bit"])
+            try:
+                await self.arka(self.supa.rpc, "hb_aktuel_duyur", {
+                    "p_baslik": f"🏷️ {a['urun']} {b['market']} aktüelde",
+                    "p_metin": f"{b['urun']} – {hb.tl(b['fiyat'])} (son gün {bit.day} {ui.AYLAR_UZUN[bit.month - 1]})",
+                    "p_anahtar": f"{b['market']}:{hb.urun_anahtari(b['urun'])}:{b['bas']}:{a['id']}"})
+            except Exception as e:
+                print("Aktüel bildirimi:", e)
+                return
+
+    def aktuel_rozeti(self, madde):
+        es = ak.aktuel_eslestir(self.aktuel, madde, 0.6) if self.aktuel else []
+        if not es:
+            return []
+        b = es[0]
+        bit = dt.date.fromisoformat(b["bit"])
+        return [ft.Container(content=yazi(f"🏷️ {b['market']} aktüel: {b['urun'][:38]} {hb.tl(b['fiyat'])} • "
+                                          f"son gün {bit.day} {ui.AYLAR_UZUN[bit.month - 1]}"
+                                          + (f" (+{len(es) - 1} seçenek)" if len(es) > 1 else ""), 10.5, True, renk=GELIR),
+                             bgcolor=saydam(GELIR, "18"), border_radius=8, padding=ft.Padding(6, 2, 6, 2),
+                             margin=ft.Margin(0, 3, 0, 0) if hasattr(ft, "Margin") else None)]
+
+    def aktuel_karti(self):
+        d = self.aktuel_durum
+        alan = ft.TextField(hint_text="Aktüellerde ara: deterjan, yağ, çay…", dense=True, expand=True, border_color="transparent")
+        durum = {"market": "Tümü"}
+        liste = ft.Column(spacing=6)
+        cipler = ft.Row(spacing=6, wrap=True)
+
+        def doldur():
+            marketler = ["Tümü"] + sorted({a["market"] for a in self.aktuel})
+            cipler.controls = [cip(m, durum["market"] == m, lambda e, m=m: sec(m), "#16a34a") for m in marketler]
+            ara = (alan.value or "").strip()
+            kayitlar = [a for a in self.aktuel if durum["market"] in ("Tümü", a["market"])]
+            if ara:
+                kayitlar = ak.aktuel_eslestir(kayitlar, ara, 0.45)
+            if not kayitlar:
+                liste.controls = [yazi("Henüz aktüel ürün yok. “Şimdi tara” ile internetten bulunur." if not self.aktuel
+                                       else "Eşleşen ürün yok.", 12, renk=ui.SOLUK)]
+                return
+            liste.controls = []
+            for a in kayitlar[:60]:
+                bit = dt.date.fromisoformat(a["bit"])
+                bas = dt.date.fromisoformat(a["bas"])
+                basladi = bas <= hb.simdi().date()
+                liste.controls.append(ft.Container(content=ft.Row([
+                    ft.Container(content=yazi(a["market"], 10.5, True, renk="white"), bgcolor="#16a34a", border_radius=8,
+                                 padding=ft.Padding(6, 3, 6, 3), width=78, alignment=ORTA),
+                    ft.Column([yazi(a["urun"], 12.5, True, max_lines=2),
+                               yazi((f"son gün {bit.day} {ui.AYLAR_UZUN[bit.month - 1]}" if basladi
+                                     else f"başlangıç {bas.day} {ui.AYLAR_UZUN[bas.month - 1]}"), 10.5, renk=ui.SOLUK)],
+                              spacing=0, expand=True),
+                    yazi(hb.tl(a["fiyat"]), 13.5, True, renk=GELIR)], spacing=10),
+                    bgcolor=ui.KART, border_radius=12, padding=10))
+
+        def sec(m):
+            durum["market"] = m
+            doldur()
+            self.guncelle()
+
+        def ara(e=None):
+            doldur()
+            self.guncelle()
+
+        alan.on_change = ara
+
+        async def tara(e):
+            await self.aktuel_yenile(zorla=True)
+
+        son = hb.tarih_goster(d["son"]) if d["son"] else "henüz taranmadı"
+        doldur()
+        return ft.Column([
+            ft.Row([yazi("Bu haftanın aktüel fırsatları", 16, True, expand=True),
+                    ft.ProgressRing(width=18, height=18) if d["calisiyor"] else
+                    buton("Şimdi tara", tara, ft.Icons.TRAVEL_EXPLORE_ROUNDED, tip="text")]),
+            yazi(f"BİM, A101, ŞOK, Migros, CarrefourSA kataloglarından yapay zeka internette bulur • son tarama: {son}"
+                 + (f" • ⚠️ {d['hata']}" if d.get("hata") else ""), 10.5, renk=ui.SOLUK),
+            ft.Container(content=ft.Row([ft.Icon(ft.Icons.LOCAL_OFFER_ROUNDED, color="#16a34a"), alan]),
+                         bgcolor=ui.KART, border_radius=16, padding=ft.Padding(12, 0, 4, 0), shadow=golge(0.4)),
+            cipler, liste], spacing=8)

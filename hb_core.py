@@ -406,6 +406,10 @@ class Supabase:
         return self._istek("POST", f"/rest/v1/{ad}", govde=kayit if isinstance(kayit, list) else [kayit],
                            basliklar={"Prefer": "return=representation"}) or []
 
+    def aktuel_ekle(self, kayitlar: list[dict]):
+        return self._istek("POST", "/rest/v1/hb_aktuel?on_conflict=market,urun,bas", govde=kayitlar,
+                           basliklar={"Prefer": "resolution=ignore-duplicates,return=minimal"})
+
     def tablo_guncelle(self, ad: str, kayit_id, alanlar: dict):
         return self._istek("PATCH", f"/rest/v1/{ad}?id=eq.{int(kayit_id)}", govde=alanlar,
                            basliklar={"Prefer": "return=representation"})

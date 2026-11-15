@@ -73,3 +73,13 @@ Supabase'de bir kez **`guncelleme_4.sql`** çalıştırın, sonra `GitHub_Yukle.
 - **Haftalık özet bildirimi:** Pazar akşamı.
 - **İnternetsiz kayıt:** İnternet yokken elle girilen kayıtlar telefonda bekler, bağlantı gelince gönderilir. Son veriler önbellekten gösterilir.
 - **Görseller:** Halka grafik (dokununca o kategorinin işlemleri), harcama takvimi, kişi renkleri (Abdurrahman mavi, Hatice pembe), Menü > Yıl özeti.
+
+## Sürüm 2.5 – aktüel kataloglar ve Erzurum altın fiyatı
+**Önce bir kez:** Supabase > SQL Editor'da `guncelleme_6.sql` içeriğini çalıştırın.
+
+- **Aktüel fırsatlar (otomatik):** Uygulama günde bir kez BİM, A101, ŞOK, Migros ve CarrefourSA'nın güncel aktüel kataloglarını yapay zekayla internette arar (Gemini + Google Arama, Gemini anahtarınızla). Sonuçlar iki telefonda ortaktır.
+  - Fiyat takibi sayfasında “Bu haftanın aktüel fırsatları” (market seçimi, arama, “Şimdi tara”).
+  - Alışveriş listesindeki ürün aktüeldeyse satırda yeşil etiket çıkar ve ikinize bir kez bildirim gider.
+  - “Listeyi en ucuza tamamla” sonucunda aktüeldekiler ayrıca gösterilir.
+- **Altın fiyatı:** Artık Harem Altın (Erzurum Kuyumcular Odası uygulamasının da baz aldığı kaynak) kullanılır; ulaşılamazsa truncgil'e döner.
+  - **Erzurum fiyatıyla eşitle:** Oda uygulamasındaki gram ve çeyrek alış/satış fiyatını bir kez girin; uygulama farkı öğrenir ve fiyatlar değiştikçe değeri Erzurum fiyatına göre hesaplar.

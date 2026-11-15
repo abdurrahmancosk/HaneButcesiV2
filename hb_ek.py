@@ -738,7 +738,8 @@ class EkOzellikler:
             ogeler.append(ft.Container(content=ft.Row([
                 ft.Checkbox(value=False, on_change=lambda e, a=a: self.page.run_task(degistir, a, True)),
                 ft.Column([yazi(a["urun"], 14, True), yazi(f"{a.get('ekleyen_ad') or ''} ekledi • "
-                                                          f"{hb.tarih_yerel(a.get('olusturma')):%d.%m %H:%M}", 10.5, renk=ui.SOLUK)],
+                                                          f"{hb.tarih_yerel(a.get('olusturma')):%d.%m %H:%M}", 10.5, renk=ui.SOLUK),
+                           *self.aktuel_rozeti(a["urun"])],
                           spacing=0, expand=True),
                 ft.IconButton(icon=ft.Icons.DELETE_OUTLINE_ROUNDED, icon_size=18,
                               on_click=lambda e, a=a: self.page.run_task(self._islem, self.supa.tablo_sil, "hb_alisveris", a["id"]))]),
@@ -915,6 +916,7 @@ class EkOzellikler:
                                                               border_color="transparent", bgcolor=ui.KART, border_radius=16),
                                          shadow=golge(0.4), border_radius=16),
                             yazi("Kendi fişlerinizden fiyat geçmişi", 13, True, renk=ui.SOLUK), liste,
+                            ft.Divider(), self.aktuel_karti(),
                             ft.Divider(), yazi("Güncel market fiyatları", 16, True), self.market_arama_karti()])
 
     def fiyat_detay(self, o):

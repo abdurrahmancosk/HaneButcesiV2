@@ -23,16 +23,18 @@ import hb_core as hb
 
 
 def gemini(prompt: str, api_anahtari: str, gorsel: bytes | None = None, mime: str = "image/jpeg",
-           json_mod: bool = True, sicaklik: float = 0.2):
+           json_mod: bool = True, sicaklik: float = 0.2, internet: bool = False):
     if not api_anahtari:
         raise hb.ApiHatasi(400, "Gemini API anahtarı ayarlanmamış (Menü > Ayarlar).")
     parcalar = [{"text": prompt}]
     if gorsel is not None:
         parcalar.append({"inline_data": {"mime_type": mime, "data": base64.b64encode(gorsel).decode()}})
     ayar = {"temperature": sicaklik}
-    if json_mod:
+    if json_mod and not internet:  # Google arama aracıyla JSON modu birlikte kullanılamıyor
         ayar["responseMimeType"] = "application/json"
     govde = {"contents": [{"parts": parcalar}], "generationConfig": ayar}
+    if internet:
+        govde["tools"] = [{"google_search": {}}]
     son = "bilinmeyen hata"
     for model in hb.gemini_modelleri(api_anahtari):
         try:
@@ -42,6 +44,9 @@ def gemini(prompt: str, api_anahtari: str, gorsel: bytes | None = None, mime: st
             if not json_mod:
                 return metin
             metin = re.sub(r"^```(?:json)?|```$", "", metin).strip()
+            if internet:
+                m = re.search(r"[\[{].*[\]}]", metin, re.S)
+                metin = m.group(0) if m else metin
             return json.loads(metin)
         except hb.ApiHatasi as e:
             son = f"{model}: {e.mesaj}"
@@ -688,11 +693,47 @@ VARLIK_TURLERI = {  # anahtar: (görünen ad, birim, olası kaynak anahtarları)
 _kur_onbellek = {"zaman": 0, "veri": {}}
 
 
+HAREM_ANAHTARLARI = {"gram": ["KULCEALTIN"], "ceyrek": ["CEYREK_YENI", "CEYREK_ESKI"], "yarim": ["YARIM_YENI", "YARIM_ESKI"],
+                     "tam": ["TEK_YENI", "TEK_ESKI"], "cumhuriyet": ["ATA_YENI", "ATA_ESKI"], "ata": ["ATA_YENI", "ATA_ESKI"],
+                     "bilezik22": ["AYAR22"], "USD": ["USDTRY"], "EUR": ["EURTRY"], "GBP": ["GBPTRY"]}
+
+
+def harem_kurlari() -> dict[str, dict]:
+    """Harem Altın canlı fiyatları (Erzurum Kuyumcular Odası uygulamasının da baz aldığı kaynak)."""
+    j = hb._http("POST", "https://www.haremaltin.com/dashboard/ajax/doviz", govde=b"dil_kodu=tr",
+                 basliklar={"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                            "X-Requested-With": "XMLHttpRequest", "Referer": "https://www.haremaltin.com/",
+                            "Origin": "https://www.haremaltin.com", "Accept": "application/json, text/javascript, */*",
+                            "User-Agent": MF_BASLIK["User-Agent"]}, zaman_asimi=15)
+    veri = (j or {}).get("data") if isinstance(j, dict) else None
+    if not isinstance(veri, dict):
+        return {}
+    sonuc = {}
+    for tur, adaylar in HAREM_ANAHTARLARI.items():
+        for a in adaylar:
+            v = veri.get(a)
+            if isinstance(v, dict):
+                alis, satis = hb.tutar_coz(str(v.get("alis") or "")), hb.tutar_coz(str(v.get("satis") or ""))
+                if alis or satis:
+                    sonuc[tur] = {"alis": alis or satis, "satis": satis or alis, "degisim": None,
+                                  "kaynak": "Harem Altın"}
+                    break
+    return sonuc
+
+
 def kurlar(zorla=False) -> dict[str, dict]:
-    """{'gram': {'alis': .., 'satis': ..}, ...} – 10 dk önbellekli."""
+    """{'gram': {'alis': .., 'satis': .., 'kaynak': ..}, ...} – 10 dk önbellekli. Önce Harem Altın, eksikler truncgil."""
     import time as _t
     if not zorla and _kur_onbellek["veri"] and _t.time() - _kur_onbellek["zaman"] < 600:
         return _kur_onbellek["veri"]
+    try:
+        harem = harem_kurlari()
+    except Exception as e:
+        print("Harem Altın:", e)
+        harem = {}
+    if len(harem) >= 8:
+        _kur_onbellek.update(zaman=_t.time(), veri=harem)
+        return harem
     j = None
     for url in ("https://finans.truncgil.com/v4/today.json", "https://finans.truncgil.com/today.json"):
         try:
@@ -712,10 +753,95 @@ def kurlar(zorla=False) -> dict[str, dict]:
                 alis = hb.tutar_coz(v.get("Buying") or v.get("Alış") or v.get("alis"))
                 satis = hb.tutar_coz(v.get("Selling") or v.get("Satış") or v.get("satis"))
                 if alis or satis:
-                    sonuc[anahtar] = {"alis": alis or satis, "satis": satis or alis, "degisim": v.get("Change") or v.get("Değişim")}
+                    sonuc[anahtar] = {"alis": alis or satis, "satis": satis or alis, "degisim": v.get("Change") or v.get("Değişim"),
+                                      "kaynak": "truncgil"}
                     break
-    _kur_onbellek.update(zaman=_t.time(), veri=sonuc)
+    sonuc.update(harem)
+    if sonuc:
+        _kur_onbellek.update(zaman=_t.time(), veri=sonuc)
+    return sonuc or _kur_onbellek["veri"]
+
+
+KUYUMCU_GRUBU = {"gram": "gram", "bilezik22": "gram", "ceyrek": "ceyrek", "yarim": "ceyrek", "tam": "ceyrek",
+                 "cumhuriyet": "ceyrek", "ata": "ceyrek"}
+
+
+def yerel_kurlar(kur: dict, farklar: dict | None) -> dict:
+    """Erzurum kuyumcu fiyatına göre düzeltilmiş kurlar. farklar: {tur: {'alis_oran': 1.03, 'satis_oran': 1.01}}.
+    Kendi oranı girilmemiş altın türleri aynı gruptaki (gram / sikke) oranı kullanır."""
+    if not farklar:
+        return kur
+    sonuc = {}
+    for tur, v in kur.items():
+        f = farklar.get(tur) or farklar.get(KUYUMCU_GRUBU.get(tur, "-"))
+        if f and tur in KUYUMCU_GRUBU:
+            sonuc[tur] = dict(v, alis=round(v["alis"] * float(f.get("alis_oran") or 1), 2),
+                              satis=round(v["satis"] * float(f.get("satis_oran") or 1), 2), yerel=True)
+        else:
+            sonuc[tur] = v
     return sonuc
+
+
+# ----------------------------------------------------------------------------
+# Marketlerin aktüel (haftalık indirim) katalogları – internette arayıp bulur
+# ----------------------------------------------------------------------------
+AKTUEL_MARKETLER = ["BİM", "A101", "ŞOK", "Migros", "CarrefourSA"]
+
+
+def aktuel_bul(api_anahtari: str, market: str, bugun=None) -> list[dict]:
+    """Gemini + Google Arama ile marketin bu haftaki aktüel kataloğunu bulur.
+    -> [{market, urun, fiyat, bas, bit}] (bas/bit: 'YYYY-MM-DD')"""
+    bugun = bugun or hb.simdi().date()
+    istem = f"""Bugün {bugun.strftime('%d.%m.%Y')}. İnternette arama yaparak {market} marketlerinin ŞU AN GEÇERLİ ve önümüzdeki
+günlerde başlayacak aktüel / haftalık indirim kataloğundaki (broşür, afiş, 'bu hafta', 'haftanın fırsatları') ürünleri bul.
+Öncelik: gıda, içecek, temizlik, kişisel bakım, bebek, ev ihtiyacı ürünleri; ardından diğer ürünler.
+Yalnızca kaynakta açıkça fiyatı yazan ürünleri yaz, fiyat uydurma. Eski haftaların kataloglarını ALMA.
+Yanıtı sadece JSON dizi olarak ver, başka metin yazma:
+[{{"urun": "ürün adı ve gramaj/adet", "fiyat": 0.0, "bas": "YYYY-MM-DD", "bit": "YYYY-MM-DD veya boş"}}]
+En fazla 80 ürün."""
+    sonuc = gemini(istem, api_anahtari, internet=True, sicaklik=0.1)
+    if isinstance(sonuc, dict):
+        sonuc = sonuc.get("urunler") or sonuc.get("items") or []
+    temiz = []
+    for u in sonuc or []:
+        if not isinstance(u, dict):
+            continue
+        ad = str(u.get("urun") or "").strip()
+        fiyat = hb.tutar_coz(u.get("fiyat"))
+        if not ad or not fiyat or fiyat <= 0:
+            continue
+        def _t(x):
+            try:
+                return dt.date.fromisoformat(str(x)[:10]).isoformat()
+            except Exception:
+                return None
+        bas = _t(u.get("bas")) or bugun.isoformat()
+        bit = _t(u.get("bit"))
+        if bit and bit < bugun.isoformat():
+            continue
+        if bas < (bugun - dt.timedelta(days=10)).isoformat():
+            continue
+        temiz.append({"market": market, "urun": ad[:120], "fiyat": round(fiyat, 2), "bas": bas,
+                      "bit": bit or (dt.date.fromisoformat(bas) + dt.timedelta(days=7)).isoformat()})
+    return temiz
+
+
+def aktuel_eslestir(aktueller: list[dict], madde: str, esik: float = 0.5) -> list[dict]:
+    """Alışveriş listesindeki bir madde için eşleşen geçerli aktüel ürünler (ucuzdan pahalıya)."""
+    bugun = hb.simdi().date().isoformat()
+    anahtar = hb.urun_anahtari(madde)
+    ilk = anahtar.split(" ")[0] if anahtar else ""
+    cikti = []
+    for a in aktueller:
+        if (a.get("bit") or "9999") < bugun:
+            continue
+        ua = hb.urun_anahtari(a.get("urun") or "")
+        puan = _benzerlik(madde, a.get("urun") or "")
+        if ilk and len(ilk) >= 3 and re.search(rf"\b{re.escape(ilk)}", ua):
+            puan = max(puan, 0.6)
+        if puan >= esik:
+            cikti.append(dict(a, puan=puan))
+    return sorted(cikti, key=lambda x: (float(x["fiyat"]), -x["puan"]))
 
 
 # ----------------------------------------------------------------------------
