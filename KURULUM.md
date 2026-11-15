@@ -1,0 +1,39 @@
+# Hane Bütçesi v2 – Kurulum (ilk deneme)
+
+Uygulama; **Flet** (Android + Windows), **Supabase** (giriş, veritabanı, anlık senkron, fiş görselleri) ve **Gemini** (fiş okuma) ile çalışır. Mevcut Supabase projenizi kullanır; eski `islemler` tablonuza dokunmaz, yeni tablolar `hb_` ile başlar.
+
+## 1) Kullanıcıları oluşturun (Supabase, 2 dk)
+Supabase Dashboard → **Authentication → Users → Add user → Create new user**
+| E-posta | Şifre | |
+|---|---|---|
+| `abdurrahman@hane.app` | (sizin belirleyeceğiniz) | ✅ *Auto Confirm User* işaretli |
+| `hatice@hane.app` | (sizin belirleyeceğiniz) | ✅ *Auto Confirm User* işaretli |
+
+Uygulamada kullanıcı adı olarak sadece **Abdurrahman** / **Hatice** yazılır, gerisini uygulama tamamlar.
+
+## 2) Veritabanını kurun
+Dashboard → **SQL Editor → New query** → `supabase_kurulum.sql` dosyasının tamamını yapıştırın → **Run**.
+Bu betik: tabloları, “Hatice yalnızca kendi kasasını görür” güvenlik kurallarını, kasa bakiyesi fonksiyonunu, anlık senkronu, `hb-fisler` fiş deposunu ve mevcut kategorilerinizle 80 ürün→kategori eşlemenizi kurar. Tekrar çalıştırmak güvenlidir.
+
+## 3) Bilgisayarda hemen deneyin
+```
+cd HaneButcesiV2
+pip install -r requirements.txt
+python main.py
+```
+Abdurrahman ile girin → **Ayarlar** → Gemini API anahtarını kaydedin (tek sefer; iki telefon da kullanır).
+İkinci bir pencerede `python main.py` açıp Hatice ile girerek anlık senkronu görebilirsiniz.
+
+## 4) Telefona APK
+1. GitHub'da boş bir depo açın (örn. `HaneButcesiV2`).
+2. `GitHub_Yukle.bat` dosyasına çift tıklayın, ilk seferde depo adresini yapıştırın.
+3. GitHub → **Actions** derlemeyi bitirince **Releases → latest → HaneButcesi_v2.apk** dosyasını iki telefona kurun.
+   (Paket adı farklı olduğu için eski uygulamanızla yan yana kurulabilir.)
+
+## Nasıl çalışır?
+- **Bütçe dönemi:** ayın 15'i – sonraki ayın 14'ü. Bugün 15 ve sonrasıysa bu ayın 15'inden, 14 ve öncesiyse geçen ayın 15'inden başlar. Oklarla önceki/sonraki dönemlere geçilir.
+- **Kasalar:** Abdurrahman *Toplam Kasa* + *Abdurrahman* + *Hatice* kasalarını görür; Hatice yalnızca kendi kasasını ve kendi işlemlerini görür (sunucu tarafında RLS ile zorunlu).
+- **Kim ekledi:** her kayıtta ekleyenin adı sunucu tarafından yazılır (taklit edilemez).
+- **Aktarım:** bir kasadan diğerine para verme; toplam kasa değişmez.
+- **Fiş:** fotoğraf/PDF seçilir → görsel buluta yüklenir → Gemini ürünleri, fiyatları, kategorileri çıkarır → siz düzeltip kaydedersiniz. Değiştirdiğiniz kategoriler öğrenilir, bir dahakine otomatik uygulanır.
+- **Anlık senkron:** biri kayıt eklediğinde diğer telefon ~1 sn içinde güncellenir ve “🔔 Hatice: …” bildirimi görünür.

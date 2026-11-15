@@ -1,0 +1,71 @@
+name: Hane Butcesi v2 - Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+
+      - name: Android lisanslari
+        run: yes | flutter doctor --android-licenses || true
+
+      - name: Python paketleri
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: APK derle
+        run: |
+          flet build apk -vv --yes \
+            --project "hanebutcesi2" \
+            --product "Hane Bütçesi" \
+            --org "com.evbutcesi" \
+            --android-permissions android.permission.INTERNET=true
+
+      - name: APK dosyasini hazirla
+        run: |
+          mkdir -p release_dist
+          find build/apk -name "*.apk" -exec cp {} release_dist/HaneButcesi_v2.apk \;
+
+      - name: Artifact yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: HaneButcesi-v2-APK
+          path: release_dist/HaneButcesi_v2.apk
+
+      - name: Release yayinla
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Hane Bütçesi v2 - En Güncel Sürüm"
+          body: |
+            GitHub tarafından otomatik derlendi.
+            HaneButcesi_v2.apk dosyasını iki telefona da indirip kurun.
+          files: release_dist/HaneButcesi_v2.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
