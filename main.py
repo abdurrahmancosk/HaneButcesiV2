@@ -10,7 +10,7 @@ import flet as ft
 
 import hb_core as hb
 
-SURUM = "2.0.0-deneme1"
+SURUM = "2.0.0-deneme2"
 
 # ---------------------------------------------------------------------------
 # Renkler
@@ -196,15 +196,86 @@ class Uygulama:
                 self.guncelle()
 
         sifre.on_submit = giris
+        kurulum_kutusu = ft.Column(spacing=10)
         self.govde.content = ft.ListView(padding=24, spacing=14, controls=[
-            ft.Container(height=40),
+            ft.Container(height=30),
             ft.Row([ft.Icon(ft.Icons.SAVINGS, size=64, color=ANA)], alignment=ft.MainAxisAlignment.CENTER),
             ft.Row([yazi("Hane Bütçesi", 28, True)], alignment=ft.MainAxisAlignment.CENTER),
             ft.Row([yazi("Abdurrahman & Hatice", 13, renk=SOLUK)], alignment=ft.MainAxisAlignment.CENTER),
-            ft.Container(height=10),
+            ft.Container(height=6),
+            kurulum_kutusu,
             kart(ft.Column([k_adi, sifre, hatirla, buton("Giriş Yap", giris, ft.Icons.LOGIN, expand=True),
                             ft.Row([bekle, hata_y])], spacing=12)),
             ft.Row([yazi(f"Sürüm {SURUM}", 11, renk=SOLUK)], alignment=ft.MainAxisAlignment.CENTER),
+        ])
+        self.guncelle()
+        self.page.run_task(self._kurulum_kontrol, kurulum_kutusu)
+
+    async def _kurulum_kontrol(self, kutu):
+        """Şifresi henüz belirlenmemiş kullanıcı varsa giriş ekranında 'şifre belirle' seçeneği gösterir."""
+        try:
+            durum = await self.arka(self.supa.kurulum_durumu)
+        except hb.ApiHatasi as e:
+            if e.durum == 404 or "hb_kurulum_durumu" in e.mesaj:
+                kutu.controls = [kart(yazi("⚠️ Veritabanı henüz kurulmamış. Supabase > SQL Editor'de "
+                                           "'supabase_kurulum.sql' dosyasını bir kez çalıştırın, sonra uygulamayı "
+                                           "yeniden açın.", 12, renk=GIDER), renk="#fee2e2")]
+                self.guncelle()
+            return
+        except Exception:
+            return
+        eksik = [k for k, hazir in durum.items() if not hazir]
+        if not eksik:
+            return
+        kutu.controls = [kart(ft.Column([
+            ft.Row([ft.Icon(ft.Icons.KEY, color=ANA), yazi("İlk kullanım: şifrenizi belirleyin", 14, True)]),
+            yazi("Şifresi henüz belirlenmemiş kullanıcılar:", 12, renk=SOLUK),
+            *[buton(f"{k.capitalize()} için şifre belirle", lambda e, k=k: self.sifre_belirle_ekrani(k),
+                    ft.Icons.PERSON_ADD, tip="tonal", expand=True) for k in eksik],
+        ], spacing=8), renk="#ccfbf1")]
+        self.guncelle()
+
+    def sifre_belirle_ekrani(self, kullanici):
+        ad = kullanici.capitalize()
+        s1 = ft.TextField(label="Yeni şifre (en az 6 karakter)", password=True, can_reveal_password=True,
+                          autofocus=True)
+        s2 = ft.TextField(label="Şifre tekrar", password=True, can_reveal_password=True)
+        hata_y = yazi("", 12, renk=GIDER)
+        bekle = ft.ProgressRing(visible=False, width=22, height=22)
+
+        async def kaydet(e):
+            if len(s1.value or "") < 6:
+                hata_y.value = "Şifre en az 6 karakter olmalı."
+            elif s1.value != s2.value:
+                hata_y.value = "Şifreler aynı değil."
+            else:
+                hata_y.value = ""
+                bekle.visible = True
+                self.guncelle()
+                try:
+                    await self.arka(self.supa.ilk_sifre_belirle, kullanici, s1.value)
+                    await self.arka(self.supa.giris, kullanici, s1.value, True)
+                    self.bildir(f"Hoş geldin {ad}! Şifren kaydedildi ✓", GELIR)
+                    await self.oturum_basla()
+                    return
+                except hb.ApiHatasi as ex:
+                    hata_y.value = f"Kaydedilemedi: {ex.mesaj}"
+                except Exception as ex:
+                    hata_y.value = f"Kaydedilemedi: {ex}"
+                bekle.visible = False
+            self.guncelle()
+
+        s2.on_submit = kaydet
+        self.govde.content = ft.ListView(padding=24, spacing=14, controls=[
+            ft.Container(height=30),
+            ft.Row([ft.Icon(ft.Icons.LOCK_RESET, size=56, color=ANA)], alignment=ft.MainAxisAlignment.CENTER),
+            ft.Row([yazi(f"{ad} için şifre belirle", 22, True)], alignment=ft.MainAxisAlignment.CENTER),
+            kart(ft.Column([
+                yazi(f"Bundan sonra kullanıcı adı olarak '{ad}' ve bu şifreyle giriş yapılacak.", 12, renk=SOLUK),
+                s1, s2, buton("Şifreyi kaydet ve giriş yap", kaydet, ft.Icons.CHECK, expand=True),
+                ft.Row([bekle, hata_y]),
+                buton("Geri", lambda e: self.giris_ekrani(), tip="text"),
+            ], spacing=12)),
         ])
         self.guncelle()
 
@@ -964,6 +1035,23 @@ class Uygulama:
                                 ft.Row([ft.Container(content=yeni_kat, expand=True),
                                         ft.IconButton(icon=ft.Icons.ADD, on_click=kat_ekle)])], spacing=10)),
             ]
+
+        yeni_sifre = ft.TextField(label="Yeni şifre (en az 6 karakter)", password=True, can_reveal_password=True)
+
+        async def sifre_degis(e):
+            if len(yeni_sifre.value or "") < 6:
+                self.bildir("Şifre en az 6 karakter olmalı.", GIDER)
+                return
+            try:
+                await self.arka(self.supa.sifre_degistir, yeni_sifre.value)
+                yeni_sifre.value = ""
+                self.bildir("Şifreniz değiştirildi ✓", GELIR)
+            except Exception as ex:
+                self.bildir(f"Değiştirilemedi: {ex}", GIDER)
+
+        kontroller.append(kart(ft.Column([yazi("Şifremi değiştir", 14, True), yeni_sifre,
+                                          buton("Şifreyi değiştir", sifre_degis, ft.Icons.LOCK, tip="outlined")],
+                                         spacing=10)))
 
         async def yenile(e):
             await self.ayarlari_yukle()

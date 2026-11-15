@@ -265,6 +265,20 @@ class Supabase:
         if hatirla:
             self.oturumu_kaydet()
 
+    def kurulum_durumu(self) -> dict[str, bool]:
+        """{'abdurrahman': True/False, 'hatice': ...} -> şifresi belirlenmiş mi"""
+        j = _http("POST", f"{self.url}/rest/v1/rpc/hb_kurulum_durumu", govde={},
+                  basliklar={"apikey": self.anahtar})
+        return {x["kullanici_adi"]: bool(x["hazir"]) for x in (j or [])}
+
+    def ilk_sifre_belirle(self, kullanici_adi: str, sifre: str):
+        k = self.eposta(kullanici_adi).split("@")[0]
+        _http("POST", f"{self.url}/rest/v1/rpc/hb_ilk_sifre", govde={"p_kullanici": k, "p_sifre": sifre},
+              basliklar={"apikey": self.anahtar})
+
+    def sifre_degistir(self, yeni_sifre: str):
+        self._istek("PUT", "/auth/v1/user", govde={"password": yeni_sifre})
+
     def yenile(self):
         if not self.refresh_token:
             raise ApiHatasi(401, "Oturum yok")

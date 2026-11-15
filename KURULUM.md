@@ -2,18 +2,12 @@
 
 Uygulama; **Flet** (Android + Windows), **Supabase** (giriş, veritabanı, anlık senkron, fiş görselleri) ve **Gemini** (fiş okuma) ile çalışır. Mevcut Supabase projenizi kullanır; eski `islemler` tablonuza dokunmaz, yeni tablolar `hb_` ile başlar.
 
-## 1) Kullanıcıları oluşturun (Supabase, 2 dk)
-Supabase Dashboard → **Authentication → Users → Add user → Create new user**
-| E-posta | Şifre | |
-|---|---|---|
-| `abdurrahman@hane.app` | (sizin belirleyeceğiniz) | ✅ *Auto Confirm User* işaretli |
-| `hatice@hane.app` | (sizin belirleyeceğiniz) | ✅ *Auto Confirm User* işaretli |
-
-Uygulamada kullanıcı adı olarak sadece **Abdurrahman** / **Hatice** yazılır, gerisini uygulama tamamlar.
-
-## 2) Veritabanını kurun
+## 1) Veritabanını kurun (tek seferlik)
 Dashboard → **SQL Editor → New query** → `supabase_kurulum.sql` dosyasının tamamını yapıştırın → **Run**.
 Bu betik: tabloları, “Hatice yalnızca kendi kasasını görür” güvenlik kurallarını, kasa bakiyesi fonksiyonunu, anlık senkronu, `hb-fisler` fiş deposunu ve mevcut kategorilerinizle 80 ürün→kategori eşlemenizi kurar. Tekrar çalıştırmak güvenlidir.
+
+## 2) İlk giriş: şifreleri uygulamada belirleyin
+Uygulamayı açınca giriş ekranında **“Abdurrahman için şifre belirle”** / **“Hatice için şifre belirle”** düğmeleri çıkar. Her kişi kendi şifresini bir kez belirler; sonra kullanıcı adı + şifre ile girilir. Şifre sonradan **Ayarlar → Şifremi değiştir** ile değiştirilebilir.
 
 ## 3) Bilgisayarda hemen deneyin
 ```

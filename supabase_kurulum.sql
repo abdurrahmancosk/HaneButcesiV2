@@ -1,6 +1,7 @@
 -- =====================================================================
 -- HANE BÜTÇESİ v2  –  Supabase kurulum betiği
 -- Supabase Dashboard > SQL Editor > New query  içine yapıştırıp RUN edin.
+-- Kullanıcı oluşturmaya gerek yok: şifreler ilk açılışta uygulamadan belirlenir.
 -- Betik tekrar çalıştırılabilir (idempotent). Eski "islemler" tablonuza dokunmaz.
 -- =====================================================================
 
@@ -183,6 +184,56 @@ create policy hb_fis_oku on storage.objects for select to authenticated
 drop policy if exists hb_fis_sil on storage.objects;
 create policy hb_fis_sil on storage.objects for delete to authenticated
   using (bucket_id = 'hb-fisler' and ((storage.foldername(name))[1] = auth.uid()::text or public.hb_yonetici_mi()));
+
+-- ---------- 9) Uygulama içinden ilk şifre belirleme ----------
+-- Abdurrahman ve Hatice hesabı yoksa, uygulamanın giriş ekranından şifre belirlenerek oluşturulur.
+-- Hesap bir kez oluştuktan sonra bu fonksiyon o kullanıcı için bir daha çalışmaz.
+create extension if not exists pgcrypto with schema extensions;
+
+create or replace function public.hb_kurulum_durumu()
+returns table (kullanici_adi text, hazir boolean)
+language sql stable security definer set search_path = public, auth as $$
+  select k, exists (select 1 from auth.users u where lower(u.email) = k || '@hane.app')
+  from unnest(array['abdurrahman','hatice']) as k;
+$$;
+
+create or replace function public.hb_ilk_sifre(p_kullanici text, p_sifre text)
+returns text
+language plpgsql security definer set search_path = public, auth, extensions as $$
+declare
+  k text := lower(trim(p_kullanici));
+  e text;
+  yeni uuid := gen_random_uuid();
+begin
+  if k not in ('abdurrahman','hatice') then
+    raise exception 'Geçersiz kullanıcı';
+  end if;
+  if length(coalesce(p_sifre,'')) < 6 then
+    raise exception 'Şifre en az 6 karakter olmalı';
+  end if;
+  e := k || '@hane.app';
+  if exists (select 1 from auth.users where lower(email) = e) then
+    raise exception 'Bu kullanıcının şifresi zaten belirlenmiş';
+  end if;
+
+  insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+                          raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+                          confirmation_token, email_change, email_change_token_new, recovery_token)
+  values ('00000000-0000-0000-0000-000000000000', yeni, 'authenticated', 'authenticated', e,
+          crypt(p_sifre, gen_salt('bf')), now(),
+          '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb, now(), now(), '', '', '', '');
+
+  insert into auth.identities (id, user_id, provider_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+  values (gen_random_uuid(), yeni, yeni::text,
+          jsonb_build_object('sub', yeni::text, 'email', e, 'email_verified', true),
+          'email', now(), now(), now());
+
+  return e;  -- profil, auth.users tetikleyicisiyle otomatik açılır
+end $$;
+
+revoke all on function public.hb_ilk_sifre(text, text) from public;
+grant execute on function public.hb_ilk_sifre(text, text) to anon, authenticated;
+grant execute on function public.hb_kurulum_durumu() to anon, authenticated;
 
 -- ---------- 8) Başlangıç verileri (mevcut uygulamanızdan aktarıldı) ----------
 insert into public.hb_ayarlar (anahtar, deger) values
