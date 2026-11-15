@@ -49,7 +49,13 @@ AYLAR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki",
 
 
 def veri_klasoru() -> str:
-    d = os.environ.get("FLET_APP_STORAGE_DATA") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "veri")
+    import sys
+    if os.environ.get("FLET_APP_STORAGE_DATA"):
+        d = os.environ["FLET_APP_STORAGE_DATA"]
+    elif getattr(sys, "frozen", False):  # Windows .exe: kalıcı kullanıcı klasörü
+        d = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "HaneButcesi")
+    else:
+        d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "veri")
     os.makedirs(d, exist_ok=True)
     return d
 

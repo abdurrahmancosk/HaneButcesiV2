@@ -29,6 +29,8 @@ Abdurrahman ile girin → **Ayarlar** → Gemini API anahtarını kaydedin (tek 
 2. `GitHub_Yukle.bat` dosyasına çift tıklayın, ilk seferde depo adresini yapıştırın.
 3. GitHub → **Actions** derlemeyi bitirince **Releases → latest → HaneButcesi_v2.apk** dosyasını iki telefona kurun.
    (Paket adı farklı olduğu için eski uygulamanızla yan yana kurulabilir.)
+4. Aynı Releases sayfasında bilgisayar için **HaneButcesi.exe** de bulunur; kurulum gerektirmez, çift tıklayıp açılır.
+   (İlk açılış 10-20 sn sürebilir. Windows SmartScreen uyarısında *Ek bilgi → Yine de çalıştır* deyin.)
 
 ## Nasıl çalışır?
 - **Bütçe dönemi:** ayın 15'i – sonraki ayın 14'ü. Bugün 15 ve sonrasıysa bu ayın 15'inden, 14 ve öncesiyse geçen ayın 15'inden başlar. Oklarla önceki/sonraki dönemlere geçilir.
