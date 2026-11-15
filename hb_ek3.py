@@ -360,7 +360,7 @@ class EkOzellikler3:
                         "urun": f"{m:g} {ak.VARLIK_TURLERI[t][1]} {ak.VARLIK_TURLERI[t][0]}", "kategori": "Yatırım & Altın & Döviz",
                         "miktar": f"{m:g} {ak.VARLIK_TURLERI[t][1]}", "birim_fiyat": f, "kasa_sahibi": sahip, "hedef_kasa": None,
                         "aciklama": (aciklama.value or "").strip() or "Varlık alımı"}])
-                    islem_id = eklenen[0]["id"] if eklenen else None
+                    islem_id = eklenen[0].get("id") if eklenen else None
                 await self._islem(self.supa.tablo_ekle, "hb_varliklar", {
                     "tur": t, "miktar": m, "birim_maliyet": f, "tarih": hb.tarih_coz(tarih.value).date().isoformat(),
                     "aciklama": (aciklama.value or "").strip() or None, "kasa_sahibi": sahip, "islem_id": islem_id},
@@ -842,7 +842,8 @@ class EkOzellikler3:
         """pg_cron yoksa ya da kaçırıldıysa: okul harçlığı ve haftalık özet açılışta tamamlanır."""
         await asyncio.sleep(3)
         eklenen = 0
-        for ad in ("hb_harclik_tamamla", "hb_haftalik_ozet"):
+        self.page.run_task(self.mesajlari_yukle)
+        for ad in ("hb_harclik_tamamla", "hb_haftalik_ozet", "hb_taksit_hatirlat"):
             try:
                 r = await self.arka(self.supa.rpc, ad, {})
                 if ad == "hb_harclik_tamamla" and isinstance(r, (int, float)):
@@ -1134,11 +1135,18 @@ class EkOzellikler3:
                              padding=ft.Padding(14, 3, 14, 3)),
                 yazi(ad, 11, "sb" if secili else False, renk=renk)], spacing=2,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True),
-                expand=1, alignment=ORTA, on_click=lambda e, n=no: self.sekmeye_git(n), padding=ft.Padding(0, 6, 0, 4)))
+                expand=1, alignment=ORTA, on_click=lambda e, n=no: self.alt_sekme_tikla(n), padding=ft.Padding(0, 6, 0, 4)))
         self.alt_menu.content = ft.Row(ogeler, spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER)
         self.alt_menu.bgcolor = ui.NAV_ZEMIN
         self.alt_menu.border = ft.Border(top=ft.BorderSide(1, ui.CIZGI)) if hasattr(ft, "Border") and hasattr(ft, "BorderSide") \
             else None
+
+    def alt_sekme_tikla(self, n):
+        if n == 4:
+            self.alt_sayfa = None  # Menü'ye dokunmak her zaman menü listesini açar
+        if n == 5 and self.sekme == 4 and getattr(self, "_alt_kaynak", None) == 5:
+            self.alt_sayfa = None
+        self.sekmeye_git(n)
 
     def ekle_menusu(self, e=None):
         sec = []
@@ -1247,6 +1255,18 @@ class EkOzellikler3:
             bsatir = [yazi("Henüz bütçe limiti yok. Market, dışarıda yemek gibi kategorilere dönem limiti koyabilirsiniz.", 12,
                            renk=ui.SOLUK)]
         k.append(bolum(ft.Icons.DONUT_LARGE_ROUNDED, "#e11d48", "Bütçe", "Limitler", "butceler", bsatir))
+        # taksitler
+        tsatir = []
+        for (kartadi, sahip, vade), ts in self.taksit_gruplari()[:3]:
+            if not self.yonetici and sahip != self.ben["id"]:
+                continue
+            tsatir.append(ft.Row([yazi(f"{kartadi} • {vade.day} {ui.AYLAR_UZUN[vade.month - 1]}", 12.5, "sb", expand=True),
+                                  yazi(", ".join(t["ad"] for t in ts)[:28], 11.5, renk=ui.SOLUK),
+                                  yazi(hb.tl(sum(float(t["aylik_tutar"]) for t in ts)), 12.5, "xb")], spacing=8))
+        if not tsatir:
+            tsatir = [yazi("Kredi kartı taksitlerinizi ekleyin; günü gelince hatırlatılır, “Ödedim” ile kasadan düşer.", 12,
+                           renk=ui.SOLUK)]
+        k.append(bolum(ft.Icons.CREDIT_CARD_ROUNDED, "#4f46e5", "Taksitler", "Tümü", "taksitler", tsatir))
         # alışveriş
         bekleyen = [a for a in self.ek["alisveris"] if not a.get("alindi")]
         asatir = [ft.Column([ft.Row([ft.Icon(ft.Icons.RADIO_BUTTON_UNCHECKED_ROUNDED, size=16, color=ui.SOLUK),

@@ -29,6 +29,8 @@ MENU = [  # anahtar, başlık, açıklama, simge, renk
     ("butceler", "Bütçe limitleri", "Kategori sınırları ve uyarılar", "DONUT_LARGE_ROUNDED", "#e11d48"),
     ("hedefler", "Birikim hedefleri", "Tatil, araba, acil durum…", "SAVINGS_ROUNDED", "#ca8a04"),
     ("borclar", "Borç / alacak", "Kime ne verildi, kimden ne alınacak", "HANDSHAKE_ROUNDED", "#2563eb"),
+    ("taksitler", "Taksitler", "Kredi kartı taksitleri, hatırlatma, ödedim", "CREDIT_CARD_ROUNDED", "#4f46e5"),
+    ("sohbet", "Hane sohbeti", "Mesaj, para isteği, kayda yorum", "FORUM_ROUNDED", "#0d9488"),
     ("fiyatlar", "Fiyat takibi", "Ürün fiyatları, güncel market fiyatları", "PRICE_CHECK_ROUNDED", "#0891b2"),
     ("varliklar", "Altın & döviz", "Elinizdeki altın/döviz, güncel değeri", "DIAMOND_ROUNDED", "#ca8a04"),
     ("yil_ozeti", "Yıl özeti", "Yılın hikayesi: en çok, en büyük, en tasarruflu", "CELEBRATION_ROUNDED", "#0d9488"),
@@ -57,7 +59,7 @@ class EkOzellikler:
     # ================================================================== veri
     def ek_varsayilan(self):
         self.ek = {"faturalar": [], "duzenli": [], "butceler": {}, "hedefler": [], "hedef_durum": {}, "alisveris": [],
-                   "borclar": []}
+                   "borclar": [], "taksitler": []}
         self.ek_hazir = None
         self.alt_sayfa = None
         self.fiyat_verisi = None
@@ -82,6 +84,7 @@ class EkOzellikler:
             "alisveris": (s.tablo, "hb_alisveris", "select=*&order=alindi,olusturma.desc&or=" +
                           hb.urllib.parse.quote(f'(alindi.eq.false,alinma.gte."{gecen_hafta}")')),
             "borclar": (s.tablo, "hb_borclar", "select=*&order=kapandi,tarih.desc&limit=200"),
+            "taksitler": (s.tablo, "hb_taksitler", "select=*&order=odeme_gunu,id&limit=300"),
         }
         sonuclar = await asyncio.gather(*[self.arka(f, *a) for f, *a in isler.values()], return_exceptions=True)
         hata = 0
@@ -99,6 +102,10 @@ class EkOzellikler:
 
     def hatirlatmalar(self):
         h = ak.fatura_hatirlatmalari(self.ek["faturalar"]) + ak.duzenli_hatirlatmalari(self.ek["duzenli"])
+        try:
+            h += self.taksit_hatirlatmalari()
+        except Exception as e:
+            print("Taksit hatırlatmaları:", e)
         sira = {"gecikti": 0, "bugun": 1, "yarin": 2, "yakin": 3}
         return sorted(h, key=lambda x: sira.get(x["seviye"], 9))
 
@@ -120,7 +127,7 @@ class EkOzellikler:
                 yazi(h["metin"], 12.5, True, renk=renk, expand=True),
                 ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=renk, size=18)], spacing=8),
                 bgcolor=saydam(renk, "1f"), border_radius=14, padding=12,
-                on_click=lambda e: self.menu_ac("faturalar")))
+                on_click=lambda e, s=h.get("sayfa", "faturalar"): self.menu_ac(s)))
         asimlar = [b for b in self.butce_durumu() if b[3] >= 0.8][:3]
         for k, h, lim, oran in asimlar:
             renk = GIDER if oran >= 1 else "#d97706"

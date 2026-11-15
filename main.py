@@ -12,19 +12,20 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.6.0"
+SURUM = "2.7.0"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler
 from hb_ek2 import EkOzellikler2
 from hb_ek3 import EkOzellikler3
+from hb_ek4 import EkOzellikler4
 from hb_ui import (ANA, GELIR, GIDER, AKTARIM, _param_var, buton, acilir, kart, yazi, KATEGORI_STIL, GUNLER, AYLAR_UZUN, ikon, kat_stil, saydam, golge, degrade, ORTA, simge_kutusu, cip, gun_basligi, fis_anahtari, grupla)
 
 
 # ---------------------------------------------------------------------------
 # Uygulama
 # ---------------------------------------------------------------------------
-class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
+class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
     def __init__(self, page: ft.Page):
         self.page = page
         self.supa = hb.Supabase()
@@ -53,6 +54,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
         self.ek_varsayilan()
         self.ek2_kur()
         self.ek3_kur()
+        self.ek4_kur()
         self.tum_islemler = None
         self._alt_kaynak = None
 
@@ -357,7 +359,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
             elif ciz:
                 self.bildir(f"Veriler alınamadı: {e}", GIDER)
         if ciz and (self.sekme in (0, 1, 5) or (self.sekme == 4 and self.alt_sayfa in
-                                             ("faturalar", "alisveris", "butceler", "hedefler", "borclar", "varliklar"))):
+                                             ("faturalar", "alisveris", "butceler", "hedefler", "borclar", "varliklar", "taksitler"))):
             self.ekrani_ciz()
 
     async def canli_degisiklik(self, veri: dict):
@@ -366,6 +368,9 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
         if tablo == "hb_bildirimler":
             if veri.get("type") == "INSERT":
                 await self.yeni_bildirim(kayit)
+            return
+        if tablo == "hb_mesajlar":
+            await self.mesaj_canli(veri)
             return
         baskasi = veri.get("type") == "INSERT" and kayit.get("ekleyen") and kayit.get("ekleyen") != self.ben["id"]
         if self.bildirim_tablosu:
@@ -413,8 +418,6 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
     def sekmeye_git(self, i):
         if i != 4 or not self.alt_sayfa:
             self._alt_kaynak = None
-        if i == 4 and self.sekme == 4 and self.alt_sayfa and self._alt_kaynak is None:
-            self.alt_sayfa = None  # Menü sekmesine yeniden dokunmak: alt sayfadan menüye dön
         self.sekme = i
         self.alt_menu_ciz()
         self.ekrani_ciz()
@@ -531,6 +534,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
                                          yazi("Canlı" if canli else "Bağlanıyor", 11, renk=ui.SOLUK)], spacing=5, tight=True),
                          padding=ft.Padding(10, 6, 10, 6), border_radius=20, border=ui.kenar(),
                          tooltip="Eşinizin eklediği kayıtlar anında görünür"),
+            *([self.sohbet_dugmesi()] if len(self.profiller) > 1 else []),
             self.zil_dugmesi(),
         ], spacing=10)
 
@@ -543,10 +547,16 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
                                    yazi("Geçmiş ›", 12, "sb", renk="#5eead4")]),
                            ui.para(toplam, 40, acik_yazi, soluk),
                            ft.Row(kasalar, spacing=10)]
+            hs = self.harcanabilir_satiri(None)
+            if hs:
+                kasa_icerik.append(hs)
         else:
             kasa_icerik = [ft.Row([yazi("KASAM", 12, "sb", renk=soluk, expand=True),
                                    yazi("Bana gelenler ›", 12, "sb", renk="#5eead4")]),
                            ui.para(bak.get(self.ben["id"], 0), 40, acik_yazi, soluk)]
+            hs = self.harcanabilir_satiri(self.ben["id"])
+            if hs:
+                kasa_icerik.append(hs)
         kasa_karti = ft.Container(content=ft.Column(kasa_icerik, spacing=12), padding=20, border_radius=26,
                                   bgcolor=ui.KASA_ZEMIN, border=ui.kenar() if ui.KOYU else None,
                                   shadow=None if ui.KOYU else golge(1.2),
@@ -872,6 +882,11 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
             eylemler.append(buton("Fişi gör", gorsel, ft.Icons.IMAGE_ROUNDED, tip="text"))
         if all(self.izinli(x) for x in satirlar):
             eylemler.append(buton("Fişi sil", sil_onay, ft.Icons.DELETE_ROUNDED, tip="text"))
+        if len(self.profiller) > 1 and i.get("id") not in (None, -1):
+            def yorum(e):
+                self.dialog_kapat(d)
+                self.yorum_yaz(i)
+            eylemler.insert(0, buton("Yorum yaz", yorum, ft.Icons.CHAT_BUBBLE_OUTLINE_ROUNDED, tip="text"))
         eylemler.append(buton("Kapat", lambda e: self.dialog_kapat(d), tip="text"))
         d.actions = eylemler
         self.dialog_ac(d)

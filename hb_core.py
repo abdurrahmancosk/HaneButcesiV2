@@ -463,7 +463,7 @@ class CanliBaglanti:
         self._calisiyor = False
         self._ref = 0
         self.tablolar = ["hb_islemler", "hb_alisveris", "hb_faturalar", "hb_duzenli", "hb_borclar", "hb_hedefler",
-                         "hb_bildirimler"]
+                         "hb_bildirimler", "hb_taksitler", "hb_mesajlar"]
 
     def _sonraki_ref(self) -> str:
         self._ref += 1

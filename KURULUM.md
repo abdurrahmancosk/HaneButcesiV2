@@ -89,3 +89,10 @@ Supabase'de bir kez **`guncelleme_4.sql`** çalıştırın, sonra `GitHub_Yukle.
 - Yeni alt menü: Özet · İşlemler · **+** · Planla · Menü. Ortadaki altın **+** düğmesi fiş tarama, galeri, PDF, gider, gelir, aktarım ve fatura yüklemeyi tek yerde toplar (eski Ekle ve Fiş sekmeleri birleşti).
 - **Planla** sekmesi: yaklaşan ödemeler, bütçe ve harçlık durumu, alışveriş listesi (aktüel etiketleriyle), birikim hedefleri, açık borç/alacak.
 - Inter yazı tipi, lacivert kasa kartı, kuruşları soluk gösteren büyük rakamlar, sade kartlar.
+
+## Sürüm 2.7 – taksitler, gerçekten harcanabilir para, hane sohbeti
+**Önce bir kez:** Supabase > SQL Editor'da `guncelleme_7.sql` içeriğini çalıştırın.
+
+- **Taksitler** (Planla ve Menü): ne alındı, kart, aylık tutar, kalan taksit, ayın kaçında ödendiği, kategori, kasa. Ödeme gününden bir gün önce ve o gün ikinize bildirim. Aynı karttaki taksitler tek “kart ödemesi” olarak görünür; “Ödedim” her birini kendi kategorisiyle harcamalara ekler ve kasadan düşer. Kalan taksit borcu ve 6 aylık yük grafiği.
+- **Gerçekten harcanabilir:** Kasa kartında; kasadan bu dönemin ödenmemiş faturaları, taksitleri ve düzenli ödemeleri düşülür. Dokununca dökümü açılır.
+- **Hane sohbeti** (Özet'teki konuşma balonu veya Menü): mesajlar, para isteği (eşiniz “Gönder” deyince aktarım kendiliğinden kaydedilir), bir kaydın detayından “Yorum yaz”, gelen kısa mesajı tek dokunuşla alışveriş listesine ekleme. Her mesaj diğer telefona bildirim olarak gider; gizli kayıtlara yazılan yorumları Hatice görmez.
