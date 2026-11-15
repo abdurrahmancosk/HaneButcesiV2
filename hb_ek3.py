@@ -1063,3 +1063,219 @@ class EkOzellikler3:
             ft.Container(content=ft.Row([ft.Icon(ft.Icons.LOCAL_OFFER_ROUNDED, color="#16a34a"), alan]),
                          bgcolor=ui.KART, border_radius=16, padding=ft.Padding(12, 0, 4, 0), shadow=golge(0.4)),
             cipler, liste], spacing=8)
+
+    # ================================================================== tema: sistem / açık / koyu
+    def tema_modu(self):
+        a = self._yerel_ayar()
+        m = a.get("tema")
+        if m not in ("sistem", "acik", "koyu"):
+            m = "koyu" if a.get("koyu") else "sistem"
+        return m
+
+    def sistem_koyu_mu(self):
+        b = getattr(self.page, "platform_brightness", None)
+        return "DARK" in str(b).upper()
+
+    def tema_modu_uygula(self):
+        m = self.tema_modu()
+        self.tema_ayarla(self.sistem_koyu_mu() if m == "sistem" else m == "koyu")
+
+    def tema_degistir(self, mod):
+        self._yerel_ayar_yaz(tema=mod, koyu=None)
+        self.tema_modu_uygula()
+        self.alt_menu_ciz()
+        self.ekrani_ciz()
+
+    async def sistem_temasi_degisti(self, e=None):
+        if self.tema_modu() == "sistem":
+            self.tema_modu_uygula()
+            self.alt_menu_ciz()
+            self.ekrani_ciz()
+
+    def tema_secici(self):
+        m = self.tema_modu()
+        secenekler = [("sistem", "Cihaz", ft.Icons.BRIGHTNESS_AUTO_ROUNDED), ("acik", "Açık", ft.Icons.LIGHT_MODE_ROUNDED),
+                      ("koyu", "Koyu", ft.Icons.DARK_MODE_ROUNDED)]
+        return ft.Column([
+            yazi("Tema", 13, "sb"),
+            ft.Row([cip(a, m == k, lambda e, k=k: self.tema_degistir(k), ANA, s) for k, a, s in secenekler], spacing=8, wrap=True),
+            yazi("“Cihaz”: telefonunuz koyu moddaysa uygulama da koyu açılır.", 11, renk=ui.SOLUK)], spacing=8)
+
+    # ================================================================== alt menü (Özet · İşlemler · + · Planla · Menü)
+    ALT_SEKMELER = [(0, "Özet", "SPACE_DASHBOARD"), (1, "İşlemler", "RECEIPT_LONG"), (None, "", ""),
+                    (5, "Planla", "EVENT_NOTE"), (4, "Menü", "GRID_VIEW")]
+
+    def _aktif_sekme(self):
+        if self.sekme == 4 and getattr(self, "_alt_kaynak", None) == 5:
+            return 5
+        return self.sekme
+
+    def alt_menu_ciz(self):
+        if not getattr(self, "alt_menu", None):
+            return
+        aktif = self._aktif_sekme()
+        ogeler = []
+        for no, ad, simge in self.ALT_SEKMELER:
+            if no is None:
+                ogeler.append(ft.Container(content=ft.Container(
+                    content=ft.Icon(ft.Icons.ADD_ROUNDED, color="#1a1203", size=30), width=58, height=58, border_radius=29,
+                    bgcolor=ui.ALTIN, alignment=ORTA, on_click=self.ekle_menusu, tooltip="Ekle: fiş, gider, gelir…",
+                    offset=ft.Offset(0, -0.22) if hasattr(ft, "Offset") else None,
+                    shadow=ft.BoxShadow(blur_radius=18, color="#59f5b841", offset=ft.Offset(0, 6))),
+                    expand=1, alignment=ORTA))
+                continue
+            secili = aktif == no
+            renk = ui.VURGU if secili else ui.SOLUK
+            ikon_adi = simge + ("_ROUNDED" if secili else "_OUTLINED")
+            ogeler.append(ft.Container(content=ft.Column([
+                ft.Container(content=ft.Icon(getattr(ft.Icons, ikon_adi, None) or getattr(ft.Icons, simge + "_ROUNDED", None)
+                                             or ft.Icons.CIRCLE, color=renk, size=23),
+                             bgcolor=saydam(ui.VURGU, "26") if secili else None, border_radius=12,
+                             padding=ft.Padding(14, 3, 14, 3)),
+                yazi(ad, 11, "sb" if secili else False, renk=renk)], spacing=2,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True),
+                expand=1, alignment=ORTA, on_click=lambda e, n=no: self.sekmeye_git(n), padding=ft.Padding(0, 6, 0, 4)))
+        self.alt_menu.content = ft.Row(ogeler, spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        self.alt_menu.bgcolor = ui.NAV_ZEMIN
+        self.alt_menu.border = ft.Border(top=ft.BorderSide(1, ui.CIZGI)) if hasattr(ft, "Border") and hasattr(ft, "BorderSide") \
+            else None
+
+    def ekle_menusu(self, e=None):
+        sec = []
+
+        def git(f):
+            async def _(ev):
+                self.dialog_kapat(alt)
+                r = f()
+                if asyncio.iscoroutine(r):
+                    await r
+            return _
+
+        def ekle(tur):
+            self.sekme = 2
+            self.ekrani_ciz(tur=tur)
+            self.alt_menu_ciz()
+
+        async def galeri():
+            self.sekmeye_git(3)
+            await self.fis_sec("resim")
+
+        async def pdf():
+            self.sekmeye_git(3)
+            await self.fis_sec("pdf")
+
+        def kutu(simge, baslik, aciklama, renk, f, genis=False):
+            return ft.Container(content=ft.Column([
+                simge_kutusu(simge, renk, 22, 44), yazi(baslik, 14, True), yazi(aciklama, 11, renk=ui.SOLUK, max_lines=2)],
+                spacing=6), bgcolor=ui.ZEMIN2, border_radius=18, padding=14, on_click=git(f),
+                col={"xs": 12 if genis else 6})
+
+        if self.mobil:
+            sec.append(kutu(ft.Icons.DOCUMENT_SCANNER_ROUNDED, "Fiş tara", "Kamerayla çek, yapay zeka okusun", "#7c3aed",
+                            self.hizli_fis))
+        sec += [kutu(ft.Icons.PHOTO_LIBRARY_ROUNDED, "Galeriden fiş", "Fotoğraf seç", "#0891b2", galeri),
+                kutu(ft.Icons.PICTURE_AS_PDF_ROUNDED, "PDF / e-fiş", "E-arşiv fatura, PDF fiş", "#e11d48", pdf),
+                kutu(ft.Icons.NORTH_EAST_ROUNDED, "Gider", "Elle harcama girin", GIDER, lambda: ekle("Gider")),
+                kutu(ft.Icons.SOUTH_WEST_ROUNDED, "Gelir", "Maaş, ek gelir…", GELIR, lambda: ekle("Gelir"))]
+        if len(self.profiller) > 1:
+            sec.append(kutu(ft.Icons.SWAP_HORIZ_ROUNDED, "Aktarım", "Kasalar arası para", AKTARIM, lambda: ekle("Aktarım")))
+        sec.append(kutu(ft.Icons.RECEIPT_LONG_ROUNDED, "Fatura yükle", "Elektrik, su, doğalgaz…", "#d97706",
+                        lambda: self.menu_ac("faturalar")))
+        izgara = ft.ResponsiveRow(sec, spacing=10, run_spacing=10) if hasattr(ft, "ResponsiveRow") else ft.Row(sec, wrap=True)
+        icerik = ft.Container(content=ft.Column([
+            ft.Row([yazi("Ne eklemek istersiniz?", 18, True, expand=True),
+                    ft.IconButton(icon=ft.Icons.CLOSE_ROUNDED, on_click=lambda ev: self.dialog_kapat(alt), tooltip="Kapat")]),
+            izgara, yazi("İpucu: Özet ekranındaki hızlı ekleme çubuğuna yazabilir ya da mikrofonla söyleyebilirsiniz.", 11,
+                         renk=ui.SOLUK)], spacing=12, tight=True, scroll=ft.ScrollMode.AUTO),
+            padding=ft.Padding(18, 14, 18, 24), bgcolor=ui.KART)
+        kw = {}
+        if ui._param_var(ft.BottomSheet, "show_drag_handle"):
+            kw["show_drag_handle"] = True
+        if ui._param_var(ft.BottomSheet, "bgcolor"):
+            kw["bgcolor"] = ui.KART
+        alt = ft.BottomSheet(content=icerik, **kw)
+        self.dialog_ac(alt)
+
+    # ================================================================== Planla sekmesi
+    def planla_ac(self, anahtar):
+        self._alt_kaynak = 5
+        self.alt_sayfa = anahtar
+        self.sekmeye_git(4)
+
+    def planla_ekrani(self):
+        from hb_ek import _ilerleme
+        bas, bit = self.donem
+
+        def bolum(simge, renk, baslik, sag_metin, anahtar, govde):
+            return kart(ft.Column([
+                ft.Row([simge_kutusu(simge, renk, 18, 36), yazi(baslik, 15, True, expand=True),
+                        ft.Container(content=ft.Row([yazi(sag_metin, 12, "sb", renk=ui.VURGU),
+                                                     ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.VURGU, size=18)],
+                                                    spacing=0, tight=True),
+                                     on_click=lambda e: self.planla_ac(anahtar), padding=ft.Padding(6, 6, 0, 6))],
+                       spacing=10), *govde], spacing=10), shadow=golge(0.5))
+
+        k = []
+        k.append(ft.Column([yazi("Planla", 26, "xb"),
+                            yazi(f"{hb.donem_etiketi(bas, bit)} dönemi • ödemeler, bütçe, liste ve hedefler", 12, renk=ui.SOLUK)],
+                           spacing=2))
+        # yaklaşan ödemeler
+        hat = self.hatirlatmalar()
+        satir = []
+        for h in hat[:5]:
+            renk = {"gecikti": GIDER, "bugun": GIDER, "yarin": "#d97706"}.get(h["seviye"], ui.SOLUK)
+            satir.append(ft.Row([ft.Container(width=8, height=8, border_radius=4, bgcolor=renk),
+                                 yazi(h["metin"], 12.5, expand=True)], spacing=10))
+        if not satir:
+            satir = [yazi("Yaklaşan ödeme yok. Fatura yüklediğinizde son ödeme gününden önce hatırlatılır.", 12, renk=ui.SOLUK)]
+        k.append(bolum(ft.Icons.EVENT_ROUNDED, "#d97706", "Yaklaşan ödemeler", "Faturalar", "faturalar", satir))
+        # bütçe
+        bsatir = []
+        for pid in ([self.ben["id"]] if not self.yonetici else list(self.profiller)):
+            d = self.kisi_butcesi(pid)
+            if d:
+                h, lim, oran = d
+                r = GIDER if oran >= 1 else ("#d97706" if oran >= 0.8 else self.kisi_renk(pid))
+                bsatir += [ft.Row([yazi(("Harçlık bütçem" if pid == self.ben["id"] and not self.yonetici
+                                         else f"{self.ad(pid)} bütçesi"), 12.5, "sb", expand=True),
+                                   yazi(f"{hb.tl(h)} / {hb.tl(lim)}", 11.5, renk=ui.SOLUK)]), _ilerleme(oran, r, 7)]
+        for kat, h, lim, oran in self.butce_durumu()[:4]:
+            r = GIDER if oran >= 1 else ("#d97706" if oran >= 0.8 else ANA)
+            bsatir += [ft.Row([yazi(kat, 12.5, "sb", expand=True, max_lines=1),
+                               yazi(f"{hb.tl(h)} / {hb.tl(lim)}", 11.5, renk=ui.SOLUK)]), _ilerleme(oran, r, 7)]
+        if not bsatir:
+            bsatir = [yazi("Henüz bütçe limiti yok. Market, dışarıda yemek gibi kategorilere dönem limiti koyabilirsiniz.", 12,
+                           renk=ui.SOLUK)]
+        k.append(bolum(ft.Icons.DONUT_LARGE_ROUNDED, "#e11d48", "Bütçe", "Limitler", "butceler", bsatir))
+        # alışveriş
+        bekleyen = [a for a in self.ek["alisveris"] if not a.get("alindi")]
+        asatir = [ft.Column([ft.Row([ft.Icon(ft.Icons.RADIO_BUTTON_UNCHECKED_ROUNDED, size=16, color=ui.SOLUK),
+                                     yazi(a["urun"], 13, expand=True)], spacing=8), *self.aktuel_rozeti(a["urun"])], spacing=2)
+                  for a in bekleyen[:5]]
+        if len(bekleyen) > 5:
+            asatir.append(yazi(f"+{len(bekleyen) - 5} ürün daha", 11.5, renk=ui.SOLUK))
+        if bekleyen:
+            asatir.append(buton("Listeyi en ucuza tamamla", self.listeyi_en_ucuza, ft.Icons.SAVINGS_ROUNDED, tip="tonal"))
+        else:
+            asatir = [yazi("Liste boş. Eklediğiniz ürünler eşinizin telefonunda anında görünür.", 12, renk=ui.SOLUK)]
+        k.append(bolum(ft.Icons.CHECKLIST_ROUNDED, GELIR, f"Alışveriş listesi ({len(bekleyen)})", "Listeyi aç", "alisveris",
+                       asatir))
+        # hedefler
+        hsatir = []
+        for hd in self.ek["hedefler"][:3]:
+            biriken = float(self.ek["hedef_durum"].get(hd["id"], 0.0))
+            hedef = float(hd.get("hedef_tutar") or 0) or 1
+            hsatir += [ft.Row([yazi(hd.get("ad") or "Hedef", 12.5, "sb", expand=True),
+                               yazi(f"{hb.tl(biriken)} / {hb.tl(hedef)}", 11.5, renk=ui.SOLUK)]),
+                       _ilerleme(biriken / hedef, "#ca8a04", 7)]
+        if not hsatir:
+            hsatir = [yazi("Tatil, araba, acil durum fonu… bir hedef koyun, ne kadar kaldığını görün.", 12, renk=ui.SOLUK)]
+        k.append(bolum(ft.Icons.SAVINGS_ROUNDED, "#ca8a04", "Birikim hedefleri", "Hedefler", "hedefler", hsatir))
+        acik_borc = [b for b in self.ek["borclar"] if not b.get("kapandi")]
+        if acik_borc:
+            k.append(bolum(ft.Icons.HANDSHAKE_ROUNDED, AKTARIM, f"Açık borç / alacak ({len(acik_borc)})", "Tümü", "borclar",
+                           [ft.Row([yazi(f"{b.get('kisi')}", 12.5, "sb", expand=True),
+                                    yazi(("alacak " if b.get("yon") == "verdim" else "borç ") + hb.tl(b.get("tutar")), 12,
+                                         renk=GELIR if b.get("yon") == "verdim" else GIDER)]) for b in acik_borc[:3]]))
+        k.append(ft.Container(height=90))
+        return ft.ListView(padding=ft.Padding(16, 14, 16, 16), spacing=12, expand=True, controls=k)

@@ -83,3 +83,9 @@ Supabase'de bir kez **`guncelleme_4.sql`** çalıştırın, sonra `GitHub_Yukle.
   - “Listeyi en ucuza tamamla” sonucunda aktüeldekiler ayrıca gösterilir.
 - **Altın fiyatı:** Artık Harem Altın (Erzurum Kuyumcular Odası uygulamasının da baz aldığı kaynak) kullanılır; ulaşılamazsa truncgil'e döner.
   - **Erzurum fiyatıyla eşitle:** Oda uygulamasındaki gram ve çeyrek alış/satış fiyatını bir kez girin; uygulama farkı öğrenir ve fiyatlar değiştikçe değeri Erzurum fiyatına göre hesaplar.
+
+## Sürüm 2.6 – yeni “Gece” görünümü
+- Açık ve koyu tema; varsayılan **cihazın teması** (telefon koyu moddaysa uygulama da koyu). Menü > Ayarlar > Tema: Cihaz / Açık / Koyu.
+- Yeni alt menü: Özet · İşlemler · **+** · Planla · Menü. Ortadaki altın **+** düğmesi fiş tarama, galeri, PDF, gider, gelir, aktarım ve fatura yüklemeyi tek yerde toplar (eski Ekle ve Fiş sekmeleri birleşti).
+- **Planla** sekmesi: yaklaşan ödemeler, bütçe ve harçlık durumu, alışveriş listesi (aktüel etiketleriyle), birikim hedefleri, açık borç/alacak.
+- Inter yazı tipi, lacivert kasa kartı, kuruşları soluk gösteren büyük rakamlar, sade kartlar.

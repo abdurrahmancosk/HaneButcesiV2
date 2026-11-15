@@ -8,24 +8,32 @@ import hb_core as hb
 # ---------------------------------------------------------------------------
 # Renkler
 # ---------------------------------------------------------------------------
-ANA = "#0f766e"
+ANA = "#0d9488"          # turkuaz (iki temada da okunur)
 GELIR = "#16a34a"
 GIDER = "#dc2626"
 AKTARIM = "#2563eb"
+ALTIN = "#f5b841"        # vurgu: ekle düğmesi, rozetler
 KOYU = False
 ARKA = KART = YAZI = SOLUK = CIZGI = ZEMIN2 = UYARI_ZEMIN = BILGI_ZEMIN = None
+VURGU = KASA_ZEMIN = KASA_IC = KASA_SOLUK = NAV_ZEMIN = GELIR_Y = GIDER_Y = None
+YAZI_TIPI = "Inter"
 
 
 def tema_uygula(koyu: bool):
-    """Paleti değiştirir; ekranlar yeniden çizildiğinde yeni renkler kullanılır."""
+    """“Gece” görsel dili: açık ve koyu iki palet. Ekranlar yeniden çizildiğinde yeni renkler kullanılır."""
     global KOYU, ARKA, KART, YAZI, SOLUK, CIZGI, ZEMIN2, UYARI_ZEMIN, BILGI_ZEMIN
+    global VURGU, KASA_ZEMIN, KASA_IC, KASA_SOLUK, NAV_ZEMIN, GELIR_Y, GIDER_Y
     KOYU = koyu
     if koyu:
-        ARKA, KART, YAZI, SOLUK = "#0b1220", "#151e2e", "#e2e8f0", "#94a3b8"
-        CIZGI, ZEMIN2, UYARI_ZEMIN, BILGI_ZEMIN = "#273449", "#1c2638", "#3b1d1d", "#172554"
+        ARKA, KART, YAZI, SOLUK = "#0b1220", "#121b2d", "#e8edf5", "#94a3b8"
+        CIZGI, ZEMIN2, UYARI_ZEMIN, BILGI_ZEMIN = "#1f2a40", "#0e1626", "#3b1d1d", "#172554"
+        VURGU, KASA_ZEMIN, KASA_IC, KASA_SOLUK = "#2dd4bf", "#121b2d", "#0e1626", "#94a3b8"
+        NAV_ZEMIN, GELIR_Y, GIDER_Y = "#0e1626", "#4ade80", "#fca5a5"
     else:
-        ARKA, KART, YAZI, SOLUK = "#f3f5f9", "#ffffff", "#0f172a", "#64748b"
-        CIZGI, ZEMIN2, UYARI_ZEMIN, BILGI_ZEMIN = "#e2e8f0", "#f8fafc", "#fee2e2", "#dbeafe"
+        ARKA, KART, YAZI, SOLUK = "#f3f5f9", "#ffffff", "#0f172a", "#5b6678"
+        CIZGI, ZEMIN2, UYARI_ZEMIN, BILGI_ZEMIN = "#e3e8ef", "#f1f4f8", "#fee2e2", "#dbeafe"
+        VURGU, KASA_ZEMIN, KASA_IC, KASA_SOLUK = "#0d9488", "#0f1b33", "#1a2844", "#a5b4cb"
+        NAV_ZEMIN, GELIR_Y, GIDER_Y = "#ffffff", "#15803d", "#b91c1c"
 
 
 tema_uygula(False)
@@ -56,14 +64,52 @@ def acilir(etiket, secenekler, deger=None, **kw):
     return ft.Dropdown(label=etiket, value=deger, options=[_SECENEK(key=s, text=s) for s in secenekler], **kw)
 
 
-def kart(icerik, renk=None, dolgu=14, **kw):
+def kenar(renk=None, kalinlik=1):
+    renk = renk or CIZGI
+    try:
+        if hasattr(ft, "Border") and hasattr(ft.Border, "all"):
+            return ft.Border.all(kalinlik, renk)
+        return ft.border.all(kalinlik, renk)
+    except Exception:
+        return None
+
+
+def kart(icerik, renk=None, dolgu=16, **kw):
+    """Gece dili: koyuda ince çerçeveli düz kart, açıkta beyaz kart + yumuşak gölge."""
+    ozel = renk is not None
     renk = renk or KART
-    return ft.Container(content=icerik, bgcolor=renk, padding=dolgu, border_radius=14, **kw)
+    if KOYU and not ozel:
+        kw.pop("shadow", None)
+        kw.setdefault("border", kenar())
+    kw.setdefault("border_radius", 20)
+    return ft.Container(content=icerik, bgcolor=renk, padding=dolgu, **kw)
+
+
+_AGIRLIK = {True: "InterB", "b": "InterB", "sb": "InterSB", "xb": "InterXB"}
 
 
 def yazi(metin, boyut=14, kalin=False, renk=None, **kw):
+    """kalin: False | True (kalın) | 'sb' (yarı kalın) | 'xb' (çok kalın – büyük rakamlar)."""
     renk = renk or YAZI
-    return ft.Text(metin, size=boyut, weight=ft.FontWeight.BOLD if kalin else None, color=renk, **kw)
+    aile = _AGIRLIK.get(kalin) if kalin else None
+    if aile and "font_family" not in kw:
+        kw["font_family"] = aile
+    return ft.Text(metin, size=boyut, weight=ft.FontWeight.BOLD if kalin is True and not aile else None, color=renk, **kw)
+
+
+def para(tutar, boyut=36, renk=None, soluk=None, isaret=False):
+    """84.787,47 ₺ → büyük tam kısım + soluk kuruş."""
+    m = hb.tl(tutar, isaret=isaret)
+    tam, _, kurus = m.rpartition(",")
+    renk = renk or YAZI
+    if not tam:
+        return yazi(m, boyut, "xb", renk=renk)
+    try:
+        return ft.Text(spans=[ft.TextSpan(tam, ft.TextStyle(size=boyut, font_family="InterXB", color=renk)),
+                              ft.TextSpan("," + kurus, ft.TextStyle(size=boyut * 0.55, font_family="InterB",
+                                                                    color=soluk or SOLUK))])
+    except Exception:
+        return yazi(m, boyut, "xb", renk=renk)
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +174,9 @@ def saydam(renk, alfa="22"):
 
 def golge(guc=1):
     try:
-        return ft.BoxShadow(spread_radius=0, blur_radius=14 * guc, color="#40000000" if KOYU else "#140f172a",
-                            offset=ft.Offset(0, 4 * guc))
+        if KOYU:
+            return ft.BoxShadow(spread_radius=0, blur_radius=10 * guc, color="#30000000", offset=ft.Offset(0, 2 * guc))
+        return ft.BoxShadow(spread_radius=0, blur_radius=18 * guc, color="#120f172a", offset=ft.Offset(0, 6 * guc))
     except Exception:
         return None
 
@@ -145,16 +192,17 @@ ORTA = getattr(getattr(ft, "Alignment", None), "CENTER", None) or getattr(getatt
 
 
 def simge_kutusu(simge, renk, boyut=20, kutu=40):
-    return ft.Container(content=ft.Icon(simge, color=renk, size=boyut), bgcolor=saydam(renk), width=kutu,
-                        height=kutu, border_radius=kutu // 2 - 4, alignment=ORTA)
+    return ft.Container(content=ft.Icon(simge, color=renk, size=boyut), bgcolor=saydam(renk, "2e" if KOYU else "1c"),
+                        width=kutu, height=kutu, border_radius=kutu * 0.32, alignment=ORTA)
 
 
 def cip(metin, secili, on_click, renk=ANA, simge=None):
-    icerik = [yazi(metin, 12, secili, renk="white" if secili else YAZI)]
+    icerik = [yazi(metin, 12.5, "sb" if secili else False, renk="white" if secili else YAZI)]
     if simge is not None:
         icerik.insert(0, ft.Icon(simge, size=15, color="white" if secili else renk))
-    return ft.Container(content=ft.Row(icerik, spacing=4, tight=True), on_click=on_click,
-                        bgcolor=renk if secili else KART, border_radius=20, padding=ft.Padding(12, 7, 12, 7))
+    return ft.Container(content=ft.Row(icerik, spacing=5, tight=True), on_click=on_click,
+                        bgcolor=renk if secili else KART, border_radius=14, padding=ft.Padding(14, 9, 14, 9),
+                        border=None if secili else kenar())
 
 
 def gun_basligi(d):

@@ -12,7 +12,7 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.5.0"
+SURUM = "2.6.0"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler
@@ -54,17 +54,23 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
         self.ek2_kur()
         self.ek3_kur()
         self.tum_islemler = None
-        self.tema_ayarla(bool(self._yerel_ayar().get("koyu")))
+        self._alt_kaynak = None
 
         page.title = "Hane Bütçesi"
         try:
             page.window.icon = "icon.ico"
         except Exception:
             pass
-        page.theme_mode = ft.ThemeMode.LIGHT
-        page.theme = ft.Theme(color_scheme_seed=ANA, use_material3=True) if _param_var(ft.Theme, "use_material3") \
-            else ft.Theme(color_scheme_seed=ANA)
-        page.bgcolor = ui.ARKA
+        try:
+            page.fonts = {"Inter": "fonts/Inter-Regular.otf", "InterSB": "fonts/Inter-SemiBold.otf",
+                          "InterB": "fonts/Inter-Bold.otf", "InterXB": "fonts/Inter-ExtraBold.otf"}
+        except Exception:
+            pass
+        self.tema_modu_uygula()  # varsayılan: cihazın teması
+        try:
+            page.on_platform_brightness_change = self.sistem_temasi_degisti
+        except Exception:
+            pass
         page.padding = 0
         try:
             page.window.width, page.window.height = 430, 880
@@ -80,7 +86,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
             print("FilePicker eklenemedi:", e)
 
         self.govde = ft.Container(expand=True)
-        page.add(ft.SafeArea(content=self.govde, expand=True))
+        self.alt_menu = ft.Container(visible=False, padding=ft.Padding(6, 0, 6, 6))
+        page.add(ft.SafeArea(content=ft.Column([self.govde, self.alt_menu], spacing=0, expand=True), expand=True))
 
     # ------------------------------------------------------------ yardımcılar
     def guncelle(self):
@@ -150,6 +157,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
     def giris_ekrani(self, hata=""):
         self.page.navigation_bar = None
         self.page.floating_action_button = None
+        self.alt_menu.visible = False
         k_adi = ft.TextField(label="Kullanıcı adı", hint_text="Abdurrahman veya Hatice", autofocus=True,
                              prefix_icon=ft.Icons.PERSON_ROUNDED)
         sifre = ft.TextField(label="Şifre", password=True, can_reveal_password=True, prefix_icon=ft.Icons.LOCK_ROUNDED)
@@ -286,18 +294,10 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
         self.yonetici = self.ben.get("rol") == "yonetici"
         await self.ayarlari_yukle()
 
-        self.page.navigation_bar = ft.NavigationBar(
-            selected_index=0, on_change=self.sekme_degisti,
-            destinations=[
-                ft.NavigationBarDestination(icon=ft.Icons.DASHBOARD_OUTLINED, selected_icon=ft.Icons.DASHBOARD, label="Özet"),
-                ft.NavigationBarDestination(icon=ft.Icons.RECEIPT_LONG_OUTLINED, selected_icon=ft.Icons.RECEIPT_LONG, label="İşlemler"),
-                ft.NavigationBarDestination(icon=ft.Icons.ADD_CIRCLE_OUTLINE, selected_icon=ft.Icons.ADD_CIRCLE, label="Ekle"),
-                ft.NavigationBarDestination(icon=ft.Icons.DOCUMENT_SCANNER_OUTLINED, selected_icon=ft.Icons.DOCUMENT_SCANNER, label="Fiş"),
-                ft.NavigationBarDestination(icon=ft.Icons.GRID_VIEW_OUTLINED, selected_icon=ft.Icons.GRID_VIEW_ROUNDED, label="Menü"),
-            ])
-        self.page.floating_action_button = ft.FloatingActionButton(
-            icon=ft.Icons.DOCUMENT_SCANNER_ROUNDED, bgcolor="#7c3aed", foreground_color="white",
-            tooltip="Fiş tara", on_click=self.hizli_fis)
+        self.page.navigation_bar = None
+        self.page.floating_action_button = None
+        self.alt_menu.visible = True
+        self.alt_menu_ciz()
         self.sekme = 0
         await self.verileri_yenile(ciz=False)
         self.ekrani_ciz()
@@ -356,7 +356,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
                 self.cevrimdisi = True
             elif ciz:
                 self.bildir(f"Veriler alınamadı: {e}", GIDER)
-        if ciz and (self.sekme in (0, 1) or (self.sekme == 4 and self.alt_sayfa in
+        if ciz and (self.sekme in (0, 1, 5) or (self.sekme == 4 and self.alt_sayfa in
                                              ("faturalar", "alisveris", "butceler", "hedefler", "borclar", "varliklar"))):
             self.ekrani_ciz()
 
@@ -411,18 +411,21 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
         self.ekrani_ciz()
 
     def sekmeye_git(self, i):
+        if i != 4 or not self.alt_sayfa:
+            self._alt_kaynak = None
+        if i == 4 and self.sekme == 4 and self.alt_sayfa and self._alt_kaynak is None:
+            self.alt_sayfa = None  # Menü sekmesine yeniden dokunmak: alt sayfadan menüye dön
         self.sekme = i
-        if self.page.navigation_bar:
-            self.page.navigation_bar.selected_index = i
+        self.alt_menu_ciz()
         self.ekrani_ciz()
 
 
     def ekrani_ciz(self, **kw):
         if getattr(self, "_kamera_acik", False):
             return  # kamera açıkken arka plan yenilemeleri ekranı bozmasın
-        ciziciler = [self.ozet_ekrani, self.islemler_ekrani, self.ekle_ekrani, self.fis_ekrani, self.menu_ekrani]
-        if self.page.floating_action_button:
-            self.page.floating_action_button.visible = self.sekme in (0, 1)
+        ciziciler = [self.ozet_ekrani, self.islemler_ekrani, self.ekle_ekrani, self.fis_ekrani, self.menu_ekrani,
+                     self.planla_ekrani]
+        self.page.bgcolor = ui.ARKA
         try:
             self.govde.content = ciziciler[self.sekme](**kw)
         except Exception as e:
@@ -457,19 +460,19 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
                                 else "Yükleniyor…", 11, renk=ui.SOLUK)], spacing=0, expand=True),
                 self.tum_zamanlar_cipi()], spacing=10), bgcolor=ui.KART, border_radius=16,
                 padding=ft.Padding(14, 8, 8, 8), shadow=golge(0.6))
-        return ft.Column([self._donem_satiri(etiket, bas, bit, geri, ileri, bugun),
-                          ft.Row([self.tum_zamanlar_cipi()], alignment=ft.MainAxisAlignment.END)], spacing=4)
+        return ft.Row([self._donem_satiri(etiket, bas, bit, geri, ileri, bugun), self.tum_zamanlar_cipi()], spacing=8,
+                      vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     def _donem_satiri(self, etiket, bas, bit, geri, ileri, bugun):
         return ft.Container(content=ft.Row([
             ft.IconButton(icon=ft.Icons.CHEVRON_LEFT_ROUNDED, on_click=geri, tooltip="Önceki dönem"),
-            ft.Column([yazi(etiket, 11, renk=ui.SOLUK), yazi(hb.donem_etiketi(bas, bit), 14, True)],
+            ft.Column([yazi(etiket, 10.5, renk=ui.SOLUK), yazi(hb.donem_etiketi(bas, bit), 13.5, "sb")],
                       spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True),
             ft.IconButton(icon=ft.Icons.TODAY_ROUNDED, on_click=bugun, tooltip="Bu döneme dön",
                           visible=self.donem_ofset != 0, icon_color=ANA),
             ft.IconButton(icon=ft.Icons.CHEVRON_RIGHT_ROUNDED, on_click=ileri, tooltip="Sonraki dönem"),
-        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), bgcolor=ui.KART, border_radius=16, padding=4,
-            shadow=golge(0.6))
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, spacing=0), bgcolor=ui.KART, border_radius=16, padding=2,
+            shadow=None if ui.KOYU else golge(0.4), border=ui.kenar() if ui.KOYU else None, expand=True)
 
 
     def islem_satiri(self, i, tarih_goster=True):
@@ -510,7 +513,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
                            ft.Row(etiketler, spacing=3)], spacing=1, expand=True),
                 yazi(f"{isaret}{hb.tl(i.get('tutar'))}", 14, True, renk=tutar_renk),
             ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
-            bgcolor=ui.KART, padding=12, border_radius=16, shadow=golge(0.5),
+            bgcolor=ui.KART, padding=12, border_radius=18, shadow=None if ui.KOYU else golge(0.4),
+            border=ui.kenar() if ui.KOYU else None,
             on_click=(lambda e, i=i: self.islem_detay(i)) if i.get("id") != -1 else None)
 
     def ozet_ekrani(self):
@@ -521,32 +525,32 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
         selam = "Günaydın" if 5 <= saat < 12 else ("İyi günler" if 12 <= saat < 18 else "İyi akşamlar")
 
         ust = ft.Row([
-            ft.Column([yazi(f"{selam}, {self.ben['ad']}", 22, True),
-                       yazi("Hane yöneticisi" if self.yonetici else "Kendi kasanız", 12, renk=ui.SOLUK)],
-                      spacing=0, expand=True),
-            ft.Container(content=ft.Row([ft.Icon(ft.Icons.CIRCLE, size=9, color=GELIR if canli else "#94a3b8"),
+            self.kisi_rozeti(self.ben["id"], boyut=44),
+            ft.Column([yazi(selam, 12.5, renk=ui.SOLUK), yazi(self.ben["ad"], 19, "xb")], spacing=0, expand=True),
+            ft.Container(content=ft.Row([ft.Icon(ft.Icons.CIRCLE, size=8, color=GELIR if canli else "#94a3b8"),
                                          yazi("Canlı" if canli else "Bağlanıyor", 11, renk=ui.SOLUK)], spacing=5, tight=True),
-                         bgcolor=ui.KART, padding=ft.Padding(10, 6, 10, 6), border_radius=20, shadow=golge(0.4)),
+                         padding=ft.Padding(10, 6, 10, 6), border_radius=20, border=ui.kenar(),
+                         tooltip="Eşinizin eklediği kayıtlar anında görünür"),
             self.zil_dugmesi(),
-        ], spacing=8)
+        ], spacing=10)
 
-        # --- Kasa kartı ---
+        # --- Kasa kartı (iki temada da koyu lacivert: “Gece” imzası) ---
+        acik_yazi, soluk = "#e8edf5", ui.KASA_SOLUK
         if self.yonetici:
             toplam = sum(bak.values())
-            kasalar = ft.Row([self._mini_kasa(self.ad(pid), deger, pid) for pid, deger in bak.items()], spacing=10)
-            kasa_icerik = [ft.Row([ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, color="#ccfbf1", size=18),
-                                   yazi("Toplam Kasa", 13, renk="#ccfbf1", expand=True),
-                                   yazi("geçmiş ›", 11, renk="#ccfbf1")], spacing=6),
-                           yazi(hb.tl(toplam), 34, True, renk="white"), ft.Container(height=4), kasalar]
+            kasalar = [self._mini_kasa(self.ad(pid), deger, pid) for pid, deger in bak.items()]
+            kasa_icerik = [ft.Row([yazi("TOPLAM KASA", 12, "sb", renk=soluk, expand=True),
+                                   yazi("Geçmiş ›", 12, "sb", renk="#5eead4")]),
+                           ui.para(toplam, 40, acik_yazi, soluk),
+                           ft.Row(kasalar, spacing=10)]
         else:
-            kasa_icerik = [ft.Row([ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, color="#ccfbf1", size=18),
-                                   yazi("Kasam", 13, renk="#ccfbf1", expand=True),
-                                   yazi("geçmiş ›", 11, renk="#ccfbf1")], spacing=6),
-                           yazi(hb.tl(bak.get(self.ben["id"], 0)), 34, True, renk="white")]
-        kasa_karti = ft.Container(content=ft.Column(kasa_icerik, spacing=4), padding=20, border_radius=24,
-                                  gradient=degrade(["#0f766e", "#0d9488", "#14b8a6"]), bgcolor=ANA,
-                                  shadow=golge(1.2), on_click=lambda e: self.kasa_ac(self.ben["id"]),
-                                  tooltip="Kasa hareketleri")
+            kasa_icerik = [ft.Row([yazi("KASAM", 12, "sb", renk=soluk, expand=True),
+                                   yazi("Bana gelenler ›", 12, "sb", renk="#5eead4")]),
+                           ui.para(bak.get(self.ben["id"], 0), 40, acik_yazi, soluk)]
+        kasa_karti = ft.Container(content=ft.Column(kasa_icerik, spacing=12), padding=20, border_radius=26,
+                                  bgcolor=ui.KASA_ZEMIN, border=ui.kenar() if ui.KOYU else None,
+                                  shadow=None if ui.KOYU else golge(1.2),
+                                  on_click=lambda e: self.kasa_ac(self.ben["id"]), tooltip="Kasa hareketleri")
 
         tum = self.tum_zamanlar and self.tum_islemler is not None
         kaynak = self.tum_islemler if tum else self.islemler
@@ -559,11 +563,12 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
                      (f"⏳ {len(self.bekleyenler)} kayıt bağlantı gelince gönderilecek." if self.bekleyenler else
                       "Yeni kayıtlarınız telefonda bekletilir."), 12, renk="#b45309", expand=True)], spacing=10),
                 renk=ui.UYARI_ZEMIN, dolgu=12))
+        butce_kartlari = []
         for pid in ([self.ben["id"]] if not self.yonetici else list(self.profiller)):
             kb = self.kisi_butce_karti(pid)
             if kb:
-                ek_kartlar.append(kb)
-        kontroller = [ust, *ek_kartlar, kasa_karti, *self.ozet_ekleri(), self.donem_cubugu()]
+                butce_kartlari.append(kb)
+        kontroller = [ust, *ek_kartlar, kasa_karti, *butce_kartlari, *self.ozet_ekleri(), self.donem_cubugu()]
 
         kontroller.append(ft.Row([
             self._ozet_kutu("Gelir", oz["gelir"], GELIR, ft.Icons.SOUTH_WEST_ROUNDED),
@@ -689,16 +694,17 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
     def _mini_kasa(self, ad, deger, pid=None):
         return ft.Container(content=ft.Column([
             ft.Row([ft.Container(width=8, height=8, border_radius=4, bgcolor=self.kisi_renk(pid) if pid else "white"),
-                    yazi(ad, 11, renk="#ccfbf1")], spacing=5),
-            yazi(hb.tl(deger), 16, True, renk="white")], spacing=0), bgcolor="#33ffffff", padding=12, border_radius=14,
+                    yazi(ad, 11.5, "sb", renk="#cbd5e1")], spacing=6),
+            yazi(hb.tl(deger), 16, "xb", renk="#e8edf5")], spacing=3), bgcolor=ui.KASA_IC, padding=12, border_radius=16,
             expand=True, on_click=(lambda e: self.kasa_ac(pid)) if pid else None)
 
 
     def _ozet_kutu(self, baslik, deger, renk, simge):
-        return ft.Container(content=ft.Column([
-            ft.Row([ft.Icon(simge, color=renk, size=16), yazi(baslik, 11.5, renk=ui.SOLUK)], spacing=4),
-            yazi(hb.tl(deger), 14.5, True, renk=renk, max_lines=1)], spacing=4),
-            bgcolor=ui.KART, padding=12, border_radius=16, expand=True, shadow=golge(0.5))
+        renk = {GELIR: ui.GELIR_Y, GIDER: ui.GIDER_Y, ANA: ui.YAZI}.get(renk, renk)
+        return kart(ft.Column([
+            ft.Row([ft.Icon(simge, color=renk, size=15), yazi(baslik, 11.5, renk=ui.SOLUK)], spacing=4),
+            yazi(hb.tl(deger).replace(",00 ₺", " ₺"), 14.5, "xb", renk=renk, max_lines=1)], spacing=4),
+            dolgu=12, expand=True, shadow=golge(0.4), border_radius=18)
 
     def islemler_ekrani(self):
         liste = ft.Column(spacing=8)
@@ -991,10 +997,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
             bottom=0, left=0, right=0, padding=ft.Padding(12, 10, 12, 24), bgcolor="#88000000")
 
         self._kamera_acik = True
-        if self.page.navigation_bar:
-            self.page.navigation_bar.visible = False
-        if self.page.floating_action_button:
-            self.page.floating_action_button.visible = False
+        self.alt_menu.visible = False
         self.govde.content = ft.Container(bgcolor="black", expand=True,
                                           content=ft.Stack([ft.Container(content=kam, left=0, right=0, top=0, bottom=0),
                                                            cerceve, ust_bar, alt_bar], expand=True))
@@ -1025,10 +1028,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3):
 
     def _kamera_kapat(self):
         self._kamera_acik = False
-        if self.page.navigation_bar:
-            self.page.navigation_bar.visible = True
-        if self.page.floating_action_button:
-            self.page.floating_action_button.visible = self.sekme in (0, 1)
+        self.alt_menu.visible = bool(self.ben)
 
     async def hizli_fis(self, e=None):
         self.sekmeye_git(3)

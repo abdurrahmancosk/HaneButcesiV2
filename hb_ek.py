@@ -255,6 +255,10 @@ class EkOzellikler:
 
     def menu_geri(self):
         self.alt_sayfa = None
+        if getattr(self, "_alt_kaynak", None) == 5:
+            self._alt_kaynak = None
+            self.sekmeye_git(5)
+            return
         self.ekrani_ciz()
 
     def _liste(self, kontroller):
@@ -1156,10 +1160,16 @@ class EkOzellikler:
         ui.tema_uygula(koyu)
         self.page.theme_mode = ft.ThemeMode.DARK if koyu else ft.ThemeMode.LIGHT
         self.page.bgcolor = ui.ARKA
-        try:
-            self.page.dark_theme = ft.Theme(color_scheme_seed=ANA)
-        except Exception:
-            pass
+        for alan in ("theme", "dark_theme"):
+            try:
+                kw = {"color_scheme_seed": ANA}
+                if ui._param_var(ft.Theme, "font_family"):
+                    kw["font_family"] = ui.YAZI_TIPI
+                if ui._param_var(ft.Theme, "use_material3"):
+                    kw["use_material3"] = True
+                setattr(self.page, alan, ft.Theme(**kw))
+            except Exception:
+                pass
 
     @staticmethod
     def _pin_ozeti(pin):
@@ -1169,6 +1179,8 @@ class EkOzellikler:
         """Uygulama açılışında PIN sorar; doğruysa devam() çağrılır."""
         self.page.navigation_bar = None
         self.page.floating_action_button = None
+        if getattr(self, "alt_menu", None):
+            self.alt_menu.visible = False
         girilen = {"pin": ""}
         noktalar = ft.Row(alignment=ft.MainAxisAlignment.CENTER, spacing=14)
         hata = yazi("", 12, renk=GIDER)
@@ -1274,7 +1286,7 @@ class EkOzellikler:
         parmak_sw = ft.Switch(label="Parmak izi / yüz tanıma ile kilit", value=bool(a.get("biyometrik")),
                               on_change=parmak_degisti, visible=self.mobil and self.yerel_kimlik is not None)
         return kart(ft.Column([
-            yazi("Görünüm ve güvenlik", 14, True), sw, parmak_sw,
+            yazi("Görünüm ve güvenlik", 14, True), self.tema_secici(), parmak_sw,
             yazi("PIN kilidi: uygulama her açıldığında 4 haneli PIN sorar (bu cihaza özel).", 11.5, renk=ui.SOLUK),
             ft.Row([ft.Container(content=pin1, expand=True), buton("Kaydet", pin_kaydet, tip="tonal")]),
             *([buton("PIN kilidini kapat", pin_kaldir, ft.Icons.LOCK_OPEN_ROUNDED, tip="text")] if a.get("pin") else [])],
