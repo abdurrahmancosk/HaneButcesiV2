@@ -85,10 +85,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
+          $v = python -c "import flet; print(getattr(flet, '__version__', '') or __import__('flet.version', fromlist=['x']).version)"
+          Write-Host "flet surumu: $v"
+          pip install "flet-desktop==$v"
+          if ($LASTEXITCODE -ne 0) { pip install flet-desktop }
+          python -c "import flet_desktop; print('flet_desktop OK')"
 
       - name: EXE derle
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "HaneButcesi" --collect-all flet --collect-all flet_desktop --collect-all certifi --hidden-import websockets main.py
+          pyinstaller --noconfirm --onefile --windowed --name "HaneButcesi" --collect-all flet --collect-all flet_desktop --collect-all certifi --hidden-import websockets --hidden-import flet_desktop main.py
 
       - name: Artifact yukle
         uses: actions/upload-artifact@v4
