@@ -17,14 +17,17 @@ if not exist ".git" (
     git init -b main
 )
 
+set "DOGRU_URL=https://github.com/abdurrahmancosk/HaneButcesiV2.git"
 git remote get-url origin >nul 2>nul
 if errorlevel 1 (
-    echo.
-    echo GitHub'da BOS yeni bir depo olusturun ^(ornek: HaneButcesiV2^)
-    echo ve adresini buraya yapistirin ^(https://github.com/KULLANICI/HaneButcesiV2.git^)
-    set /p REPO_URL=Depo adresi:
-    call git remote add origin %%REPO_URL%%
+    git remote add origin "%DOGRU_URL%"
+) else (
+    git remote set-url origin "%DOGRU_URL%"
 )
+
+echo Depo adresi:
+git remote get-url origin
+echo.
 
 if exist "build-apk.yml" (
     if not exist ".github\workflows" mkdir ".github\workflows"
@@ -32,9 +35,10 @@ if exist "build-apk.yml" (
 )
 
 git add main.py hb_core.py requirements.txt supabase_kurulum.sql KURULUM.md .gitignore GitHub_Yukle.bat build-apk.yml .github
-set TARIH=%date% %time%
+set "TARIH=%date% %time%"
 git commit -m "Guncelleme: %TARIH%" --allow-empty
 git push -u origin main
+if errorlevel 1 goto HATA
 
 echo.
 echo ===================================================================
@@ -42,3 +46,15 @@ echo  Tamam! GitHub ^> Actions sekmesinden derlemeyi izleyin (~10 dk).
 echo  Bitince Releases ^> latest altindan HaneButcesi_v2.apk indirilir.
 echo ===================================================================
 pause
+exit /b 0
+
+:HATA
+echo.
+echo ===================================================================
+echo  HATA: GitHub'a yuklenemedi!
+echo  https://github.com/new adresinden "HaneButcesiV2" adinda BOS bir
+echo  depo actiginizdan emin olun (README eklemeyin), sonra bu dosyayi
+echo  tekrar calistirin.
+echo ===================================================================
+pause
+exit /b 1
