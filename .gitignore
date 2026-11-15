@@ -1,4 +1,6 @@
 veri/
 __pycache__/
 build/
+dist/
 *.apk
+*.exe

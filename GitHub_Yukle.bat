@@ -34,16 +34,22 @@ if exist "build-apk.yml" (
     copy /y "build-apk.yml" ".github\workflows\build-apk.yml" >nul
 )
 
-git add main.py hb_core.py requirements.txt supabase_kurulum.sql KURULUM.md .gitignore GitHub_Yukle.bat build-apk.yml .github
+git add main.py hb_core.py requirements.txt supabase_kurulum.sql KURULUM.md .gitignore GitHub_Yukle.bat EXE_Indir.ps1 build-apk.yml .github
 set "TARIH=%date% %time%"
 git commit -m "Guncelleme: %TARIH%" --allow-empty
+for /f "usebackq delims=" %%t in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('o')"`) do set "PUSH_ZAMANI=%%t"
 git push -u origin main
 if errorlevel 1 goto HATA
 
 echo.
+echo Yukleme tamam. Derleme bitince HaneButcesi.exe bu klasore otomatik indirilecek.
+echo (Pencereyi kapatmayin; APK icin GitHub ^> Releases sayfasina bakin.)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0EXE_Indir.ps1" -Sonra "%PUSH_ZAMANI%"
+
+echo.
 echo ===================================================================
-echo  Tamam! GitHub ^> Actions sekmesinden derlemeyi izleyin (~10 dk).
-echo  Bitince Releases ^> latest altindan HaneButcesi_v2.apk indirilir.
+echo  Telefon APK: https://github.com/abdurrahmancosk/HaneButcesiV2/releases/latest
+echo  Bilgisayar EXE: bu klasordeki HaneButcesi.exe
 echo ===================================================================
 pause
 exit /b 0
