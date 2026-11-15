@@ -58,8 +58,15 @@ begin
   select
     e.id,
     case e.tur::text when 'Gelir' then 'Gelir' when 'Para Aktarımı' then 'Aktarım' else 'Gider' end,
-    (to_timestamp(e.tarih::text || ' ' || coalesce(nullif(e.saat::text, ''), '12:00'), 'DD.MM.YYYY HH24:MI')::timestamp
-       at time zone 'Europe/Istanbul'),
+    ((case
+        when btrim(e.tarih::text) ~ '^\d{4}-\d{1,2}-\d{1,2}' then to_date(left(btrim(e.tarih::text), 10), 'YYYY-MM-DD')
+        when btrim(e.tarih::text) ~ '^\d{1,2}[./-]\d{1,2}[./-]\d{4}'
+          then to_date(substring(regexp_replace(btrim(e.tarih::text), '[/-]', '.', 'g') from '^\d{1,2}\.\d{1,2}\.\d{4}'), 'DD.MM.YYYY')
+        else (coalesce(e.created_at, now()) at time zone 'Europe/Istanbul')::date
+      end)
+      + (case when btrim(coalesce(e.saat::text, '')) ~ '^\d{1,2}:\d{2}'
+              then substring(btrim(e.saat::text) from '^\d{1,2}:\d{2}')::time else time '12:00' end)
+    ) at time zone 'Europe/Istanbul',
     case when e.tur::text = 'Gelir' then nullif(e.kaynak::text, '') when e.tur::text = 'Para Aktarımı' then null
          else nullif(e.firma::text, '') end,
     case when e.tur::text = 'Para Aktarımı' then null else nullif(e.urun::text, '') end,
@@ -71,22 +78,13 @@ begin
     abs(pg_temp.sayi(e.tutar::text)),
     nullif(e.aciklama::text, ''),
     e.kisi,
-    case when e.tur::text = 'Para Aktarımı' then
-      case when e.kaynak_k ~ '(hatice|aile üyesi|aile uyesi)' then h
-           when e.kaynak_k ~ 'abdurrahman' then a
-           when e.kisi = a then h else a end
-    end,
+    -- eski uygulamadaki gibi: aktarım her zaman gönderenden diğer kişiye
+    case when e.tur::text = 'Para Aktarımı' then case when e.kisi = a then h else a end end,
     e.kisi,
     coalesce(e.created_at, now())
   from eski e
   where pg_temp.sayi(e.tutar::text) is not null
     and pg_temp.sayi(e.tutar::text) <> 0
-    and e.tarih::text ~ '^\d{2}\.\d{2}\.\d{4}$'
-    -- kendi kasasına aktarım olamaz
-    and not (e.tur::text = 'Para Aktarımı' and
-             (case when e.kaynak_k ~ '(hatice|aile üyesi|aile uyesi)' then h
-                   when e.kaynak_k ~ 'abdurrahman' then a
-                   when e.kisi = a then h else a end) = e.kisi)
   on conflict (eski_id) do nothing;
 
   get diagnostics adet = row_count;

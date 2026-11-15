@@ -10,7 +10,7 @@ import flet as ft
 
 import hb_core as hb
 
-SURUM = "2.0.0-deneme2"
+SURUM = "2.0.0-deneme3"
 
 # ---------------------------------------------------------------------------
 # Renkler
@@ -71,6 +71,7 @@ class Uygulama:
         self.kategoriler = list(hb.VARSAYILAN_KATEGORILER)
         self.gelir_turleri = list(hb.VARSAYILAN_GELIR_TURLERI)
         self.gemini_anahtari = ""
+        self.gizli_varsayilan = False
         self.eslemeler: dict[str, str] | None = None
         self.donem_ofset = 0
         self.islemler: list[dict] = []
@@ -318,6 +319,8 @@ class Uygulama:
             if g:
                 self.gelir_turleri = _json.loads(g)
             self.gemini_anahtari = (await self.arka(self.supa.ayar_oku, "gemini_api_key")) or ""
+            if self.yonetici:
+                self.gizli_varsayilan = (await self.arka(self.supa.ayar_oku, "gizli_varsayilan")) == "1"
         except Exception as e:
             print("Ayarlar okunamadı:", e)
         if "Diğer" not in self.kategoriler:
@@ -441,6 +444,8 @@ class Uygulama:
                           yazi(f"{self.ad(i.get('kasa_sahibi'))} kasası", 11, renk=SOLUK)]
         if i.get("fis_gorsel"):
             etiketler += [ft.Icon(ft.Icons.RECEIPT, size=13, color=ANA)]
+        if i.get("gizli"):
+            etiketler += [ft.Icon(ft.Icons.LOCK, size=13, color="#b45309"), yazi("Gizli", 11, renk="#b45309")]
 
         return ft.Container(
             content=ft.Row([
@@ -596,6 +601,10 @@ class Uygulama:
                          ("Firma", i.get("firma")), ("Ürün / Açıklama", i.get("urun")), ("Miktar", i.get("miktar"))]
             if i.get("birim_fiyat"):
                 satirlar.append(("Birim fiyat", hb.tl(i.get("birim_fiyat"))))
+        if self.yonetici:
+            satirlar.append(("Görünürlük", "🔒 Hatice'den gizli" if i.get("gizli") else "Hatice görebilir"
+                             if (i.get("kasa_sahibi") != self.ben["id"] or i.get("tur") == "Aktarım")
+                             else "Sizin kasanız (Hatice zaten görmez)"))
         satirlar += [("Not", i.get("aciklama")), ("Ekleyen", i.get("ekleyen_ad")),
                      ("Eklenme", hb.tarih_goster(i.get("olusturma")))]
         if i.get("fis_grup"):
@@ -702,6 +711,7 @@ class Uygulama:
 
         hata = yazi("", 12, renk=GIDER)
         kaydet_btn = None
+        gizli_cb = ft.Checkbox(label="🔒 Hatice'den gizle", value=bool(d.get("gizli")) if d else self.gizli_varsayilan)
 
         async def kaydet(e):
             t = hb.tutar_coz(tutar.value)
@@ -712,6 +722,8 @@ class Uygulama:
             sahip = kasa.value if self.yonetici else ben
             kayit = {"tur": tur, "tutar": t, "tarih": hb.iso_tarih(hb.tarih_coz(tarih.value)),
                      "aciklama": aciklama.value.strip() or None, "kasa_sahibi": sahip}
+            if self.yonetici:
+                kayit["gizli"] = bool(gizli_cb.value)
             if tur == "Aktarım":
                 hedef = next((p["id"] for p in kisiler if p["id"] != sahip), None)
                 if not hedef:
@@ -761,6 +773,8 @@ class Uygulama:
             if self.yonetici:
                 alanlar += [yazi("Hangi kasa?", 12, renk=SOLUK), kasa]
             alanlar += [tarih, aciklama]
+        if self.yonetici:
+            alanlar.append(gizli_cb)
         alanlar += [hata, ft.Row([kaydet_btn])]
         if d.get("id"):
             alanlar.append(ft.Row([buton("Vazgeç", lambda e: self.sekmeye_git(1), tip="text")]))
@@ -927,6 +941,7 @@ class Uygulama:
 
         kasa = ft.RadioGroup(value=f["kasa"], content=ft.Row(
             [ft.Radio(value=p["id"], label=p["ad"]) for p in self.profiller.values()], wrap=True))
+        gizli_cb = ft.Checkbox(label="🔒 Hatice'den gizle", value=self.gizli_varsayilan)
 
         def vazgec(e):
             self.fis = None
@@ -946,6 +961,8 @@ class Uygulama:
                                  "kategori": kat_dd.value or "Diğer", "miktar": mik or None,
                                  "birim_fiyat": birim, "tutar": t, "kasa_sahibi": sahip, "hedef_kasa": None,
                                  "fis_grup": grup, "fis_gorsel": f.get("yol")})
+                if self.yonetici:
+                    kayitlar[-1]["gizli"] = bool(gizli_cb.value)
                 if kat_dd.value and kat_dd.value != ai_kat:
                     ogrenilen[hb.urun_anahtari(ad)] = kat_dd.value
             if not kayitlar:
@@ -976,7 +993,7 @@ class Uygulama:
                                   *([buton("Görsel", lambda e: self.page.run_task(self.fis_gorseli_goster, f["yol"]),
                                            ft.Icons.IMAGE, tip="text")] if f.get("yol") else [])]),
                           *bilgi, kart(ft.Column([firma, tarih] + (
-                              [yazi("Hangi kasadan ödendi?", 12, renk=SOLUK), kasa] if self.yonetici else []) +
+                              [yazi("Hangi kasadan ödendi?", 12, renk=SOLUK), kasa, gizli_cb] if self.yonetici else []) +
                               ([yazi(alt_bilgi, 11, renk=SOLUK)] if alt_bilgi else []), spacing=10))]
         return ft.ListView(padding=14, spacing=10, expand=True, controls=ust_kontroller + [
             satir_kutusu,
@@ -1009,6 +1026,24 @@ class Uygulama:
                     self.bildir("API anahtarı kaydedildi ✓ (iki telefon da kullanır)", GELIR)
                 except Exception as ex:
                     self.bildir(f"Kaydedilemedi: {ex}", GIDER)
+
+            async def gizli_degisti(e):
+                deger = bool(e.control.value)
+                try:
+                    await self.arka(self.supa.ayar_yaz, "gizli_varsayilan", "1" if deger else "0")
+                    self.gizli_varsayilan = deger
+                    self.bildir("Kaydedildi ✓", GELIR)
+                except Exception as ex:
+                    self.bildir(f"Kaydedilemedi: {ex}", GIDER)
+
+            kontroller.append(kart(ft.Column([
+                yazi("Gizlilik", 14, True),
+                yazi("Hatice sizin kasanızı hiç göremez. 'Gizli' işaretlediğiniz kayıtlar (Hatice'nin kasasına "
+                     "yazılan veya ona yapılan aktarım dahil) da Hatice'ye gösterilmez; kasa toplamı yine doğru "
+                     "hesaplanır. Bu seçenek yalnızca sizde vardır.", 11, renk=SOLUK),
+                ft.Checkbox(label="Yeni kayıtlarımı varsayılan olarak Hatice'den gizle",
+                            value=self.gizli_varsayilan, on_change=gizli_degisti),
+            ], spacing=8)))
 
             yeni_kat = ft.TextField(label="Yeni gider kategorisi")
 

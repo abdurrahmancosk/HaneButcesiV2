@@ -62,7 +62,8 @@ create table if not exists public.hb_islemler (
   ekleyen_ad   text,
   fis_grup     uuid,                                               -- aynı fişten gelen satırlar
   fis_gorsel   text,                                               -- storage yolu
-  eski_id      bigint unique,                                     -- eski uygulamadan aktarılan kaydın no'su
+  eski_id      bigint unique,
+  gizli        boolean not null default false,                    -- true: Hatice göremez                                     -- eski uygulamadan aktarılan kaydın no'su
   olusturma    timestamptz not null default now(),
   guncelleme   timestamptz not null default now(),
   constraint hb_aktarim_hedef check ((tur = 'Aktarım') = (hedef_kasa is not null))
@@ -115,20 +116,20 @@ create policy hb_profil_oku on public.hb_profiller for select to authenticated u
 -- Abdurrahman her şeyi görür; Hatice yalnızca kendi kasasını ve kendisine gelen aktarımları
 drop policy if exists hb_islem_oku on public.hb_islemler;
 create policy hb_islem_oku on public.hb_islemler for select to authenticated
-  using (public.hb_yonetici_mi() or kasa_sahibi = auth.uid() or hedef_kasa = auth.uid());
+  using (public.hb_yonetici_mi() or ((kasa_sahibi = auth.uid() or hedef_kasa = auth.uid()) and not gizli));
 
 drop policy if exists hb_islem_ekle on public.hb_islemler;
 create policy hb_islem_ekle on public.hb_islemler for insert to authenticated
-  with check (public.hb_yonetici_mi() or kasa_sahibi = auth.uid());
+  with check (public.hb_yonetici_mi() or (kasa_sahibi = auth.uid() and not gizli));
 
 drop policy if exists hb_islem_guncelle on public.hb_islemler;
 create policy hb_islem_guncelle on public.hb_islemler for update to authenticated
-  using (public.hb_yonetici_mi() or ekleyen = auth.uid())
-  with check (public.hb_yonetici_mi() or kasa_sahibi = auth.uid());
+  using (public.hb_yonetici_mi() or (ekleyen = auth.uid() and not gizli))
+  with check (public.hb_yonetici_mi() or (kasa_sahibi = auth.uid() and not gizli));
 
 drop policy if exists hb_islem_sil on public.hb_islemler;
 create policy hb_islem_sil on public.hb_islemler for delete to authenticated
-  using (public.hb_yonetici_mi() or ekleyen = auth.uid());
+  using (public.hb_yonetici_mi() or (ekleyen = auth.uid() and not gizli));
 
 drop policy if exists hb_ayar_oku on public.hb_ayarlar;
 create policy hb_ayar_oku on public.hb_ayarlar for select to authenticated using (true);
@@ -144,10 +145,10 @@ drop policy if exists hb_esleme_guncelle on public.hb_kategori_eslemeleri;
 create policy hb_esleme_guncelle on public.hb_kategori_eslemeleri for update to authenticated using (true) with check (true);
 
 -- ---------- 5) Kasa bakiyeleri (tüm zamanlar) ----------
--- security invoker: RLS uygulanır; Hatice yalnızca kendi satırını alır.
+-- Gizli kayıtlar dahil hesaplanır; Hatice yalnızca kendi kasasının toplamını alır.
 create or replace function public.hb_bakiyeler()
 returns table (kisi uuid, ad text, bakiye numeric)
-language sql stable security invoker set search_path = public as $$
+language sql stable security definer set search_path = public as $$
   select p.id, p.ad,
          coalesce(sum(case
            when i.tur = 'Gelir'   and i.kasa_sahibi = p.id then  i.tutar
