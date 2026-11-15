@@ -45,6 +45,7 @@ jobs:
             --project "hanebutcesi2" \
             --product "Hane Bütçesi" \
             --org "com.evbutcesi" \
+            --splash-color "#0f172a" --splash-dark-color "#0f172a" \
             --android-permissions android.permission.INTERNET=true android.permission.CAMERA=true android.permission.RECORD_AUDIO=true android.permission.POST_NOTIFICATIONS=true
 
       - name: APK dosyasini hazirla
@@ -93,7 +94,7 @@ jobs:
 
       - name: EXE derle
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "HaneButcesi" --collect-all flet --collect-all flet_desktop --collect-all certifi --hidden-import websockets --hidden-import flet_desktop --hidden-import openpyxl --add-data "assets;assets" main.py
+          pyinstaller --noconfirm --onefile --windowed --name "HaneButcesi" --collect-all flet --collect-all flet_desktop --collect-all certifi --hidden-import websockets --hidden-import flet_desktop --hidden-import openpyxl --add-data "assets;assets" --icon "assets/icon.ico" main.py
 
       - name: Artifact yukle
         uses: actions/upload-artifact@v4

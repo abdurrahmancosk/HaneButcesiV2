@@ -536,3 +536,217 @@ def _sar(metin: str, font, genislik: int, d) -> list[str]:
                 satir = k
         satirlar.append(satir)
     return satirlar
+
+
+# ----------------------------------------------------------------------------
+# Mükerrer fiş kontrolü
+# ----------------------------------------------------------------------------
+
+def mukerrer_bul(adaylar: list[dict], firma: str, zaman, toplam: float | None, saat_biliniyor: bool) -> dict | None:
+    """Aynı gün eklenmiş kayıtlar içinde aynı market + aynı saat (±10 dk) ya da aynı toplam olan fişi bulur."""
+    gruplar: dict[str, list[dict]] = {}
+    for k in adaylar:
+        gruplar.setdefault(str(k.get("fis_grup") or f"{k.get('firma')}|{k.get('tarih')}"), []).append(k)
+    en_iyi = None
+    for satirlar in gruplar.values():
+        ilk = satirlar[0]
+        benz = _benzerlik(firma or "", ilk.get("firma") or "") if firma else 0.5
+        if firma and benz < 0.55:
+            continue
+        t = sum(float(x.get("tutar") or 0) for x in satirlar)
+        fark_dk = abs((hb.tarih_yerel(ilk.get("tarih")) - zaman).total_seconds()) / 60
+        toplam_tutuyor = bool(toplam) and abs(t - float(toplam)) <= max(1.0, float(toplam) * 0.02)
+        if (saat_biliniyor and fark_dk <= 10) or toplam_tutuyor:
+            puan = (2 if toplam_tutuyor else 0) + (2 if saat_biliniyor and fark_dk <= 10 else 0) + benz
+            if not en_iyi or puan > en_iyi["puan"]:
+                en_iyi = {"puan": puan, "firma": ilk.get("firma"), "tarih": ilk.get("tarih"), "toplam": t,
+                          "adet": len(satirlar), "ekleyen": ilk.get("ekleyen_ad")}
+    return en_iyi
+
+
+# ----------------------------------------------------------------------------
+# Market fiyatları (marketfiyati.org.tr – TÜBİTAK; resmi olmayan erişim, değişebilir)
+# ----------------------------------------------------------------------------
+MF_TABAN = "https://api.marketfiyati.org.tr/api/v2"
+MF_BASLIK = {"Accept": "application/json", "Origin": "https://marketfiyati.org.tr",
+             "Referer": "https://marketfiyati.org.tr/", "Accept-Language": "tr-TR,tr;q=0.9",
+             "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Mobile Safari/537.36"}
+MARKET_ADLARI = {"bim": "BİM", "a101": "A101", "sok": "ŞOK", "migros": "Migros", "carrefour": "CarrefourSA",
+                 "hakmar": "Hakmar", "tarim": "Tarım Kredi", "tarimkredi": "Tarım Kredi"}
+_mf_depolar: dict = {}
+
+
+def market_adi(depo_id: str, yedek: str | None = None) -> str:
+    on = str(depo_id or "").split("-")[0].lower().replace("_", "")
+    for k, v in MARKET_ADLARI.items():
+        if on.startswith(k):
+            return v
+    return yedek or on.upper()
+
+
+def mf_yakin_depolar(enlem: float, boylam: float, mesafe: int = 5) -> list[str]:
+    anahtar = (round(enlem, 3), round(boylam, 3), mesafe)
+    if anahtar in _mf_depolar:
+        return _mf_depolar[anahtar]
+    j = hb._http("POST", f"{MF_TABAN}/nearest", govde={"latitude": enlem, "longitude": boylam, "distance": mesafe},
+                 basliklar=MF_BASLIK, zaman_asimi=20)
+    liste = j if isinstance(j, list) else (j or {}).get("content") or (j or {}).get("data") or []
+    ids = [d.get("id") or d.get("depotId") for d in liste if isinstance(d, dict)]
+    _mf_depolar[anahtar] = [i for i in ids if i]
+    return _mf_depolar[anahtar]
+
+
+def mf_ara(kelime: str, enlem: float, boylam: float, mesafe: int = 5, adet: int = 12) -> list[dict]:
+    """[{urun, marka, olcu, gorsel, fiyatlar: [{market, fiyat, sube}]}] – en ucuz fiyat önce."""
+    govde = {"keywords": kelime, "latitude": enlem, "longitude": boylam, "distance": mesafe, "pages": 0, "size": adet}
+    try:
+        depolar = mf_yakin_depolar(enlem, boylam, mesafe)
+        if depolar:
+            govde["depots"] = depolar
+    except Exception as e:
+        print("Yakın market listesi alınamadı:", e)
+    j = hb._http("POST", f"{MF_TABAN}/search", govde=govde, basliklar=MF_BASLIK, zaman_asimi=25)
+    sonuc = []
+    for u in (j or {}).get("content") or []:
+        fiyatlar = []
+        for d in u.get("productDepotInfoList") or []:
+            f = hb.tutar_coz(d.get("price") if d.get("price") is not None else d.get("unitPrice"))
+            if f:
+                fiyatlar.append({"market": market_adi(d.get("depotId"), d.get("marketAdi")), "fiyat": f,
+                                 "sube": d.get("depotName")})
+        if not fiyatlar:
+            continue
+        # aynı marketin birden çok şubesi varsa en ucuzunu tut
+        enucuz = {}
+        for f in fiyatlar:
+            if f["market"] not in enucuz or f["fiyat"] < enucuz[f["market"]]["fiyat"]:
+                enucuz[f["market"]] = f
+        sonuc.append({"urun": u.get("title") or "", "marka": u.get("brand"), "olcu": u.get("refinedVolumeOrWeight"),
+                      "gorsel": u.get("imageUrl"), "fiyatlar": sorted(enucuz.values(), key=lambda f: f["fiyat"])})
+    return sonuc
+
+
+def liste_en_ucuz(maddeler: list[str], enlem: float, boylam: float, mesafe: int = 5) -> dict:
+    """Alışveriş listesi için market market sepet toplamı ve her ürünün en ucuz seçeneği."""
+    import concurrent.futures as cf
+    with cf.ThreadPoolExecutor(max_workers=4) as ex:
+        sonuclar = list(ex.map(lambda m: (m, _guvenli(mf_ara, m, enlem, boylam, mesafe, 8)), maddeler))
+    sepet: dict[str, dict] = {}
+    urunler = []
+    for madde, bulunan in sonuclar:
+        bulunan = bulunan or []
+        en_iyi = None
+        market_min: dict[str, tuple] = {}
+        for u in bulunan[:6]:
+            for f in u["fiyatlar"]:
+                if f["market"] not in market_min or f["fiyat"] < market_min[f["market"]][0]:
+                    market_min[f["market"]] = (f["fiyat"], u["urun"])
+                if not en_iyi or f["fiyat"] < en_iyi["fiyat"]:
+                    en_iyi = {"market": f["market"], "fiyat": f["fiyat"], "urun": u["urun"], "olcu": u.get("olcu")}
+        for m, (fiyat, ad) in market_min.items():
+            s = sepet.setdefault(m, {"market": m, "toplam": 0.0, "bulunan": 0, "kalemler": []})
+            s["toplam"] += fiyat
+            s["bulunan"] += 1
+            s["kalemler"].append((madde, ad, fiyat))
+        urunler.append({"madde": madde, "en_iyi": en_iyi, "secenek": len(bulunan)})
+    sirali = sorted(sepet.values(), key=lambda s: (-s["bulunan"], s["toplam"]))
+    return {"marketler": sirali, "urunler": urunler, "madde_sayisi": len(maddeler)}
+
+
+def _guvenli(f, *a):
+    try:
+        return f(*a)
+    except Exception as e:
+        print("Market araması başarısız:", e)
+        return None
+
+
+def konum_bul(adres: str) -> tuple[float, float, str] | None:
+    """OpenStreetMap ile 'Palandöken, Erzurum' gibi bir adresin koordinatı."""
+    q = hb.urllib.parse.quote(adres)
+    j = hb._http("GET", f"https://nominatim.openstreetmap.org/search?q={q}&format=json&limit=1&countrycodes=tr",
+                 basliklar={"User-Agent": "HaneButcesi/2.4 (aile butce uygulamasi)", "Accept-Language": "tr"},
+                 zaman_asimi=15)
+    if not j:
+        return None
+    return float(j[0]["lat"]), float(j[0]["lon"]), j[0].get("display_name", adres)
+
+
+# ----------------------------------------------------------------------------
+# Altın / döviz kurları (finans.truncgil.com – serbest piyasa)
+# ----------------------------------------------------------------------------
+VARLIK_TURLERI = {  # anahtar: (görünen ad, birim, olası kaynak anahtarları)
+    "gram": ("Gram altın", "gr", ["GRA", "gram-altin", "GRAMALTIN", "gram altın"]),
+    "ceyrek": ("Çeyrek altın", "adet", ["CEYREKALTIN", "ceyrek-altin", "çeyrek altın"]),
+    "yarim": ("Yarım altın", "adet", ["YARIMALTIN", "yarim-altin", "yarım altın"]),
+    "tam": ("Tam altın", "adet", ["TAMALTIN", "tam-altin", "tam altın"]),
+    "cumhuriyet": ("Cumhuriyet altını", "adet", ["CUMHURIYETALTINI", "cumhuriyet-altini", "cumhuriyet altını"]),
+    "ata": ("Ata altın", "adet", ["ATAALTIN", "ata-altin", "ata altın"]),
+    "bilezik22": ("22 ayar bilezik", "gr", ["YIA", "22-ayar-bilezik", "22AYARBILEZIK", "22 ayar bilezik"]),
+    "USD": ("Dolar", "$", ["USD"]), "EUR": ("Euro", "€", ["EUR"]), "GBP": ("Sterlin", "£", ["GBP"]),
+}
+_kur_onbellek = {"zaman": 0, "veri": {}}
+
+
+def kurlar(zorla=False) -> dict[str, dict]:
+    """{'gram': {'alis': .., 'satis': ..}, ...} – 10 dk önbellekli."""
+    import time as _t
+    if not zorla and _kur_onbellek["veri"] and _t.time() - _kur_onbellek["zaman"] < 600:
+        return _kur_onbellek["veri"]
+    j = None
+    for url in ("https://finans.truncgil.com/v4/today.json", "https://finans.truncgil.com/today.json"):
+        try:
+            j = hb._http("GET", url, basliklar={"User-Agent": "HaneButcesi/2.4"}, zaman_asimi=15)
+            if j:
+                break
+        except Exception as e:
+            print("Kur kaynağı:", url, e)
+    if not j:
+        return _kur_onbellek["veri"]
+    norm = {hb.urun_anahtari(k).replace(" ", "").replace("-", ""): v for k, v in j.items() if isinstance(v, dict)}
+    sonuc = {}
+    for anahtar, (_, _, adaylar) in VARLIK_TURLERI.items():
+        for a in adaylar:
+            v = j.get(a) or norm.get(hb.urun_anahtari(a).replace(" ", "").replace("-", ""))
+            if isinstance(v, dict):
+                alis = hb.tutar_coz(v.get("Buying") or v.get("Alış") or v.get("alis"))
+                satis = hb.tutar_coz(v.get("Selling") or v.get("Satış") or v.get("satis"))
+                if alis or satis:
+                    sonuc[anahtar] = {"alis": alis or satis, "satis": satis or alis, "degisim": v.get("Change") or v.get("Değişim")}
+                    break
+    _kur_onbellek.update(zaman=_t.time(), veri=sonuc)
+    return sonuc
+
+
+# ----------------------------------------------------------------------------
+# Halka (donut) grafik görseli
+# ----------------------------------------------------------------------------
+
+def halka_png(dilimler: list[tuple[str, float, str]], ust: str, alt: str, koyu: bool = False, boyut: int = 520) -> bytes:
+    from PIL import Image, ImageDraw
+    S = boyut * 2
+    im = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    toplam = sum(v for _, v, _ in dilimler) or 1
+    bas = -90.0
+    kutu = [S * 0.06, S * 0.06, S * 0.94, S * 0.94]
+    for _, v, renk in dilimler:
+        aci = 360 * v / toplam
+        if aci >= 0.5:
+            d.pieslice(kutu, bas, bas + max(aci - (1.2 if len(dilimler) > 1 else 0), 0.3), fill=renk)
+        bas += aci
+    ic = S * 0.25
+    d.ellipse([ic, ic, S - ic, S - ic], fill=(0, 0, 0, 0))
+    im2 = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    m = Image.new("L", (S, S), 255)
+    ImageDraw.Draw(m).ellipse([ic, ic, S - ic, S - ic], fill=0)
+    im2.paste(im, (0, 0), m)
+    d2 = ImageDraw.Draw(im2)
+    yazi_renk = (226, 232, 240) if koyu else (15, 23, 42)
+    soluk = (148, 163, 184) if koyu else (100, 116, 139)
+    d2.text((S / 2, S / 2 - S * 0.03), ust, font=_font(True, int(S * 0.075)), anchor="mm", fill=yazi_renk)
+    d2.text((S / 2, S / 2 + S * 0.06), alt, font=_font(False, int(S * 0.045)), anchor="mm", fill=soluk)
+    im2 = im2.resize((boyut, boyut), Image.LANCZOS)
+    tampon = io.BytesIO()
+    im2.save(tampon, format="PNG")
+    return tampon.getvalue()

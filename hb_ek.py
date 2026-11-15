@@ -29,7 +29,10 @@ MENU = [  # anahtar, başlık, açıklama, simge, renk
     ("butceler", "Bütçe limitleri", "Kategori sınırları ve uyarılar", "DONUT_LARGE_ROUNDED", "#e11d48"),
     ("hedefler", "Birikim hedefleri", "Tatil, araba, acil durum…", "SAVINGS_ROUNDED", "#ca8a04"),
     ("borclar", "Borç / alacak", "Kime ne verildi, kimden ne alınacak", "HANDSHAKE_ROUNDED", "#2563eb"),
-    ("fiyatlar", "Fiyat takibi", "Ürün fiyatları, en ucuz market", "PRICE_CHECK_ROUNDED", "#0891b2"),
+    ("fiyatlar", "Fiyat takibi", "Ürün fiyatları, güncel market fiyatları", "PRICE_CHECK_ROUNDED", "#0891b2"),
+    ("varliklar", "Altın & döviz", "Elinizdeki altın/döviz, güncel değeri", "DIAMOND_ROUNDED", "#ca8a04"),
+    ("yil_ozeti", "Yıl özeti", "Yılın hikayesi: en çok, en büyük, en tasarruflu", "CELEBRATION_ROUNDED", "#0d9488"),
+    ("kasa", "Kasa hareketleri", "Gelirler, aktarımlar, tüm geçmiş", "ACCOUNT_BALANCE_WALLET_ROUNDED", "#0f766e"),
     ("rapor", "Akıllı rapor", "Dönem karşılaştırma, Excel / PDF", "INSIGHTS_ROUNDED", "#7c3aed"),
     ("asistan", "Asistana sor", "“Bu ay sigaraya ne verdik?”", "AUTO_AWESOME_ROUNDED", "#a855f7"),
     ("ayarlar", "Ayarlar", "Tema, PIN, şifre, yapay zeka", "SETTINGS_ROUNDED", "#475569"),
@@ -102,7 +105,8 @@ class EkOzellikler:
     def butce_durumu(self):
         """[(kategori, harcanan, limit, oran)] – dönem içi."""
         harcanan = hb.donem_ozeti(self.islemler, None if self.yonetici else self.ben["id"])["kategoriler"]
-        sonuc = [(k, harcanan.get(k, 0.0), lim, harcanan.get(k, 0.0) / lim) for k, lim in self.ek["butceler"].items()]
+        sonuc = [(k, harcanan.get(k, 0.0), lim, harcanan.get(k, 0.0) / lim) for k, lim in self.ek["butceler"].items()
+                 if not str(k).startswith("kisi:") and lim]
         return sorted(sonuc, key=lambda x: -x[3])
 
     # ================================================================== özet ekleri
@@ -200,8 +204,8 @@ class EkOzellikler:
             if not liste:
                 return
             try:
-                await self.arka(self.supa.islem_ekle, liste)
-                self.bildir(f"{len(liste)} kayıt eklendi ✓", GELIR)
+                if await self.kayit_ekle(liste):
+                    self.bildir(f"{len(liste)} kayıt eklendi ✓", GELIR)
                 await self.verileri_yenile()
             except Exception as ex:
                 self.bildir(f"Kaydedilemedi: {ex}", GIDER)
@@ -313,7 +317,24 @@ class EkOzellikler:
                                                          ft.Column([yazi(k, 13, True), alt], spacing=4, expand=True)], spacing=10),
                                          bgcolor=ui.KART, border_radius=16, padding=12, shadow=golge(0.4),
                                          on_click=(lambda e, k=k: self.butce_duzenle(k)) if self.yonetici else None))
-        return self._liste([bilgi] + satirlar)
+        kisi = []
+        if self.yonetici:
+            kisi.append(yazi("Kişi (harçlık) bütçeleri", 15, True))
+            for p in self.profiller.values():
+                d = self.kisi_butcesi(p["id"])
+                kisi.append(ft.Container(content=ft.Row([
+                    self.kisi_rozeti(p["id"], boyut=30),
+                    ft.Column([yazi(p["ad"], 13.5, True),
+                               yazi(f"{hb.tl(d[0])} / {hb.tl(d[1])} bu dönem" if d else "Limit yok – dokunup belirleyin", 11.5,
+                                    renk=ui.SOLUK)], spacing=0, expand=True),
+                    ft.Icon(ft.Icons.EDIT_ROUNDED, size=18, color=ui.SOLUK)], spacing=10),
+                    bgcolor=ui.KART, border_radius=16, padding=12, shadow=golge(0.4),
+                    on_click=lambda e, i=p["id"]: self.kisi_butce_duzenle(i)))
+        else:
+            kb = self.kisi_butce_karti(self.ben["id"])
+            if kb:
+                kisi.append(kb)
+        return self._liste(kisi + [bilgi] + satirlar)
 
     def butce_duzenle(self, kategori):
         mevcut = self.ek["butceler"].get(kategori)
@@ -733,6 +754,15 @@ class EkOzellikler:
                     yazi(a["urun"], 13, renk=ui.SOLUK, expand=True, style=ft.TextStyle(decoration=_UZERI_CIZILI))
                     if _UZERI_CIZILI is not None else yazi(a["urun"], 13, renk=ui.SOLUK, expand=True)]),
                     border_radius=14, padding=ft.Padding(4, 0, 4, 0)))
+        if bekleyen:
+            ogeler.insert(1, ft.Container(content=ft.Row([
+                ft.Icon(ft.Icons.SAVINGS_ROUNDED, color="white"),
+                ft.Column([yazi("Listeyi en ucuza tamamla", 14, True, renk="white"),
+                           yazi("Yakınınızdaki marketlerin güncel fiyatlarıyla karşılaştır", 11, renk="#dcfce7")],
+                          spacing=0, expand=True),
+                ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color="white")], spacing=10),
+                gradient=degrade(["#15803d", "#22c55e"]), bgcolor=GELIR, border_radius=18, padding=14, shadow=golge(0.8),
+                on_click=self.listeyi_en_ucuza))
         return self._liste(ogeler)
 
     async def alisverisi_isaretle(self, urun_adlari):
@@ -883,7 +913,9 @@ class EkOzellikler:
         return self._liste([ft.Container(content=ft.TextField(hint_text="Ürün ara: yumurta, süt, deterjan…",
                                                               prefix_icon=ft.Icons.SEARCH_ROUNDED, on_change=ara, dense=True,
                                                               border_color="transparent", bgcolor=ui.KART, border_radius=16),
-                                         shadow=golge(0.4), border_radius=16), liste])
+                                         shadow=golge(0.4), border_radius=16),
+                            yazi("Kendi fişlerinizden fiyat geçmişi", 13, True, renk=ui.SOLUK), liste,
+                            ft.Divider(), yazi("Güncel market fiyatları", 16, True), self.market_arama_karti()])
 
     def fiyat_detay(self, o):
         satirlar = [ft.Row([yazi(hb.tarih_yerel(k.get("tarih")).strftime("%d.%m.%Y"), 12, renk=ui.SOLUK, width=86),

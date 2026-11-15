@@ -228,6 +228,8 @@ def _http(method: str, url: str, *, govde=None, basliklar: dict | None = None, h
         raise ApiHatasi(e.code, str(mesaj)) from None
     except urllib.error.URLError as e:
         raise ApiHatasi(0, f"Bağlantı hatası: {e.reason}") from None
+    except (TimeoutError, OSError) as e:
+        raise ApiHatasi(0, f"Bağlantı hatası: {e}") from None
 
 
 # ----------------------------------------------------------------------------
@@ -309,7 +311,12 @@ class Supabase:
             self.kullanici_id = j.get("kullanici_id")
             if not self.refresh_token:
                 return False
-            self.yenile()
+            try:
+                self.yenile()
+            except ApiHatasi as e:
+                if e.durum != 0 or not self.kullanici_id:
+                    raise
+                self.cevrimdisi = True  # internet yok: önbellekle açılır, bağlantı gelince token yenilenir
             return True
         except Exception:
             return False

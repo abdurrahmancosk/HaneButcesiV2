@@ -59,3 +59,17 @@ Supabase'de bir kez **`guncelleme_4.sql`** çalıştırın, sonra `GitHub_Yukle.
   5. Uygulamayı iki telefonda da kapatıp açın, bildirim iznini verin.
 - **Sesli ekleme:** Özet'teki hızlı ekleme kutusunda 🎙️ → "Migros'tan iki süt seksen lira" deyin → tekrar dokunun → onaylayın. Asistan ekranında da sesli soru sorabilirsiniz. (Telefonda; ilk kullanımda mikrofon izni ister.)
 - **Parmak izi:** Menü → Ayarlar → *Parmak izi / yüz tanıma ile kilit*. PIN ile birlikte de kullanılabilir.
+
+## Sürüm 2.4 – kasa geçmişi, altın/döviz, market fiyatları ve daha fazlası
+**Önce bir kez:** Supabase > SQL Editor'da `guncelleme_5.sql` dosyasının içeriğini yapıştırıp **Run** deyin.
+
+- **Kasa hareketleri:** Özet'teki kasa kartına (yönetici: kişi kasalarına da) dokunun. Para girişleri / Aktarımlar / Giderler / Tümü, ay ay toplamlarla bütün geçmiş.
+- **Tüm zamanlar:** Özet'te dönem çubuğunun altındaki “Tüm zamanlar” ile ilk kayıttan bugüne gelir/gider/kategoriler.
+- **Mükerrer fiş uyarısı:** Okunan fiş aynı gün, aynı market ve aynı saat (±10 dk) ya da aynı toplamla zaten eklenmişse kırmızı uyarı çıkar; “Yine de ekle” ile kaydedilebilir.
+- **Altın & döviz (Menü):** “Mevcut varlığımı ekle” kasayı etkilemez; “Yeni aldım” kasadan gider olarak düşer; “Sattım” kasaya gelir ekler. Güncel değer ve kâr/zarar finans.truncgil.com fiyatlarıyla.
+- **Güncel market fiyatları:** Menü > Ayarlar'da ev konumunu kaydedin. Fiyat takibi sayfasından ürün arayın; Alışveriş listesinde “Listeyi en ucuza tamamla”. Kaynak marketfiyati.org.tr (TÜBİTAK); resmi API değildir, değişirse çalışmayabilir.
+- **Harçlık bütçesi:** Menü > Bütçe limitleri > Kişi bütçeleri (yalnız Abdurrahman belirler). Hatice kalan tutarı Özet'te görür; %80 ve aşımda ikinize bildirim.
+- **Okul harçlığı otomatiği:** Menü > Ayarlar (Abdurrahman). Hafta içi okul günlerinde, MEB tatilleri hariç otomatik gider.
+- **Haftalık özet bildirimi:** Pazar akşamı.
+- **İnternetsiz kayıt:** İnternet yokken elle girilen kayıtlar telefonda bekler, bağlantı gelince gönderilir. Son veriler önbellekten gösterilir.
+- **Görseller:** Halka grafik (dokununca o kategorinin işlemleri), harcama takvimi, kişi renkleri (Abdurrahman mavi, Hatice pembe), Menü > Yıl özeti.
