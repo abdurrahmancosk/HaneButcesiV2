@@ -102,3 +102,17 @@ Supabase'de bir kez **`guncelleme_4.sql`** çalıştırın, sonra `GitHub_Yukle.
 - **Fatura türü ekleme:** Fatura ekranında türün yanındaki **+** ile yeni tür (Okul servisi, Kasko…). “Kredi kartı” ve “Sigorta” hazır. Ödenince hangi harcama kategorisine yazılacağı seçilebilir. Kayıtlı faturalarda **Düzenle**.
 - **Aşağı çekip yenile:** Özet, İşlemler, Planla ve menü sayfalarında ekranı aşağı çekin (ya da Özet'teki “Canlı” etiketine dokunun).
 - **Daha hızlı okuma:** Fiş/fatura/ekstre okurken yapay zekanın uzun “düşünme” adımı kapatıldı.
+
+## Sürüm 2.8 – e-postadan otomatik fatura takibi, abonelikler
+**Önce bir kez:** Supabase > SQL Editor'da `guncelleme_8.sql` içeriğini çalıştırın.
+
+Gmail bağlama (bir kez, her cihazda ayrı):
+1. Google hesabında 2 adımlı doğrulama açık olmalı (myaccount.google.com > Güvenlik).
+2. https://myaccount.google.com/apppasswords → uygulama adı “Hane Bütçesi” → Oluştur → 16 harfli şifreyi kopyalayın.
+3. Uygulamada Menü > Ayarlar > “E-postadan fatura takibi”: Gmail adresi + uygulama şifresi → **Bağla**.
+
+- Bağlanınca son 45 günün faturaları aranır; sonra uygulama her açıldığında (4 saatte bir) ve aşağı çekince (30 dakikada bir) kontrol eder.
+- Fatura e-postaları (PDF ek ya da mail metni) okunur, fatura olarak eklenir, ikinize bildirim gider. Reklam/dekont/kargo mailleri atlanır. Aynı fatura iki kez eklenmez.
+- Abone numarası olan her yeni kurum **Abonelikler**e kendiliğinden eklenir; beklenen günden 5 gün sonra fatura gelmezse uyarılır.
+- E-postayla gelen kart ekstresi fark edilir: Taksitler sayfasında “taksitleri güncelle” önerisi çıkar.
+- Uygulama şifresi yalnızca o cihazda saklanır (buluta/Hatice'ye gitmez). Mailler okunmamış olarak kalır. İstediğiniz an Ayarlar'dan “Kaldır” ya da Google hesabınızdan şifreyi silerek erişimi kapatabilirsiniz.

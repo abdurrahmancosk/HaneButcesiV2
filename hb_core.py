@@ -406,6 +406,11 @@ class Supabase:
         return self._istek("POST", f"/rest/v1/{ad}", govde=kayit if isinstance(kayit, list) else [kayit],
                            basliklar={"Prefer": "return=representation"}) or []
 
+    def fatura_mailden_ekle(self, kayit: dict) -> list[dict]:
+        """Aynı e-posta (mail_id) daha önce eklendiyse sessizce atlar; eklendiyse kaydı döndürür."""
+        return self._istek("POST", "/rest/v1/hb_faturalar?on_conflict=mail_id", govde=[kayit],
+                           basliklar={"Prefer": "resolution=ignore-duplicates,return=representation"}) or []
+
     def aktuel_ekle(self, kayitlar: list[dict]):
         return self._istek("POST", "/rest/v1/hb_aktuel?on_conflict=market,urun,bas", govde=kayitlar,
                            basliklar={"Prefer": "resolution=ignore-duplicates,return=minimal"})
@@ -463,7 +468,7 @@ class CanliBaglanti:
         self._calisiyor = False
         self._ref = 0
         self.tablolar = ["hb_islemler", "hb_alisveris", "hb_faturalar", "hb_duzenli", "hb_borclar", "hb_hedefler",
-                         "hb_bildirimler", "hb_taksitler", "hb_mesajlar"]
+                         "hb_bildirimler", "hb_taksitler", "hb_mesajlar", "hb_abonelikler"]
 
     def _sonraki_ref(self) -> str:
         self._ref += 1

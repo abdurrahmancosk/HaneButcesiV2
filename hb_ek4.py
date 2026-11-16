@@ -142,6 +142,12 @@ class EkOzellikler4:
                 ft.Row([buton("Ödedim" if len(ts) == 1 else f"Hepsini ödedim ({len(ts)})",
                               lambda e, ts=ts: self.taksit_ode(ts), ft.Icons.CHECK_ROUNDED)],
                        alignment=ft.MainAxisAlignment.END)], spacing=6), shadow=golge(0.5)))
+        if getattr(self, "_bekleyen_ekstre", None):
+            ogeler.insert(1, ft.Container(content=ft.Row([
+                ft.Icon(ft.Icons.MARK_EMAIL_UNREAD_ROUNDED, color="white"),
+                yazi("E-postada yeni kart ekstresi var: taksitleri güncelle", 13, "sb", renk="white", expand=True),
+                ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color="white")], spacing=10), bgcolor="#4f46e5", border_radius=16,
+                padding=12, on_click=lambda e: self.ekstre_mail_sor()))
         if not gorunen:
             ogeler.append(kart(yazi("Henüz taksit yok. Kredi kartı taksitlerinizi ekleyin; günü gelince ikinize de hatırlatılır, "
                                     "“Ödedim” deyince kasadan düşer ve harcamalara kendi kategorisiyle eklenir.", 12.5,
@@ -805,6 +811,8 @@ class EkOzellikler4:
             self.guncelle()
         try:
             await asyncio.gather(self.verileri_yenile(ciz=False), self.mesajlari_yukle(), return_exceptions=True)
+            if self.mail_otomatik(0.5):
+                self.page.run_task(self.mail_kontrol, True)
             if self.cevrimdisi:
                 self.bildir("📴 İnternet yok – son kaydedilen veriler gösteriliyor", GIDER)
             else:
@@ -814,3 +822,306 @@ class EkOzellikler4:
             if bar is not None:
                 bar.visible = False
             self.ekrani_ciz()
+
+    # ================================================================== e-postadan fatura takibi
+    def mail_ayari(self):
+        return self._yerel_ayar().get("mail") or {}
+
+    def _mail_gorulen(self):
+        g = self._yerel_oku("mail_gorulen")
+        return set(g or [])
+
+    def mail_karti(self):
+        a = self.mail_ayari()
+        adres = ft.TextField(label="Gmail adresi", value=a.get("adres", ""), dense=True,
+                             keyboard_type=ft.KeyboardType.EMAIL)
+        sifre = ft.TextField(label="Uygulama şifresi (16 harf)", value="", password=True, can_reveal_password=True, dense=True,
+                             hint_text="•••• •••• •••• ••••" if a.get("sifre") else "abcd efgh ijkl mnop")
+        durum = yazi(self._mail_durum_metni(), 11.5, renk=ui.SOLUK)
+
+        async def kaydet(e):
+            ad = (adres.value or "").strip()
+            sf = (sifre.value or "").replace(" ", "") or a.get("sifre", "")
+            if not ad or len(sf) < 16:
+                self.bildir("Gmail adresi ve 16 harfli uygulama şifresi gerekli.", GIDER)
+                return
+            self.bildir("Bağlantı deneniyor…")
+            try:
+                await self.arka(ak.mail_baglanti_dene, ad, sf)
+            except Exception as ex:
+                m = str(ex)
+                self.bildir("Bağlanamadı: " + ("adres ya da uygulama şifresi hatalı" if "AUTHENTICATIONFAILED" in m.upper()
+                                               or "invalid credentials" in m.lower() else m), GIDER)
+                return
+            self._yerel_ayar_yaz(mail={"adres": ad, "sifre": sf, "son_kontrol": None})
+            sifre.value = ""
+            self.bildir("✓ Gmail bağlandı. Son 45 günün faturaları aranıyor…", GELIR)
+            await self.mail_kontrol(sessiz=False, gun=45)
+
+        def kaldir(e):
+            self._yerel_ayar_yaz(mail=None)
+            self.bildir("Gmail bağlantısı kaldırıldı (şifre bu cihazdan silindi)")
+            self.ekrani_ciz()
+
+        adimlar = ft.Column([
+            yazi("Kurulum (bir kez):", 12, "sb"),
+            yazi("1) Google hesabınızda 2 adımlı doğrulama açık olmalı.", 11.5, renk=ui.SOLUK),
+            yazi("2) myaccount.google.com/apppasswords adresinde “Hane Bütçesi” adıyla uygulama şifresi oluşturun.", 11.5,
+                 renk=ui.SOLUK),
+            yazi("3) Çıkan 16 harfli şifreyi buraya yazıp “Bağla”ya dokunun.", 11.5, renk=ui.SOLUK),
+            ft.TextButton("Uygulama şifresi sayfasını aç", url="https://myaccount.google.com/apppasswords")
+            if ui._param_var(ft.TextButton, "url") else yazi("myaccount.google.com/apppasswords", 11.5, renk=ui.VURGU)],
+            spacing=2)
+        bagli = bool(a.get("sifre"))
+        return kart(ft.Column([
+            ft.Row([simge_kutusu(ft.Icons.MARK_EMAIL_READ_ROUNDED, "#ea4335", 18, 36),
+                    ft.Column([yazi("E-postadan fatura takibi", 14, True),
+                               yazi("Bağlı: " + a.get("adres", "") if bagli else "Bağlı değil", 11.5,
+                                    renk=GELIR if bagli else ui.SOLUK)], spacing=0, expand=True)], spacing=10),
+            yazi("Gmail'e gelen su, doğalgaz, elektrik, internet, telefon faturaları okunur ve kendiliğinden eklenir. Şifre "
+                 "yalnızca bu cihazda saklanır; Hatice'nin telefonuna ve buluta gitmez. Mailler okunmamış olarak kalır.", 11.5,
+                 renk=ui.SOLUK),
+            *([] if bagli else [adimlar]), adres, sifre, durum,
+            ft.Row([buton("Bağla" if not bagli else "Güncelle", kaydet, ft.Icons.LINK_ROUNDED, tip="tonal"),
+                    *([buton("Şimdi kontrol et", lambda e: self.page.run_task(self.mail_kontrol, False),
+                             ft.Icons.REFRESH_ROUNDED, tip="text"),
+                       buton("Kaldır", kaldir, tip="text")] if bagli else [])], wrap=True, spacing=4)], spacing=8),
+            shadow=golge(0.5))
+
+    def _mail_durum_metni(self):
+        a = self.mail_ayari()
+        if not a.get("son_kontrol"):
+            return "Henüz kontrol edilmedi."
+        return f"Son kontrol: {hb.tarih_goster(a['son_kontrol'])}" + (f" • {a['son_sonuc']}" if a.get("son_sonuc") else "")
+
+    async def mail_kontrol(self, sessiz=True, gun=21):
+        a = self.mail_ayari()
+        if not a.get("sifre") or getattr(self, "_mail_calisiyor", False):
+            return
+        if not self.gemini_anahtari:
+            if not sessiz:
+                self.bildir("Faturaları okumak için Menü > Ayarlar'da Gemini anahtarı gerekli.", GIDER)
+            return
+        self._mail_calisiyor = True
+        gorulen = self._mail_gorulen()
+        eklenen, ekstreler, hatalar = [], [], 0
+        try:
+            if not sessiz:
+                self.bildir("📧 E-postadaki faturalar kontrol ediliyor…")
+            try:
+                mailler = await self.arka(ak.mail_faturalari_getir, a["adres"], a["sifre"], gun, gorulen)
+            except Exception as ex:
+                m = str(ex)
+                sonuc = ("Gmail girişi reddedildi: uygulama şifresini yenileyin" if "AUTHENTICATIONFAILED" in m.upper()
+                         else f"E-postaya ulaşılamadı ({m[:60]})")
+                self._yerel_ayar_yaz(mail=dict(a, son_kontrol=hb.iso_tarih(hb.simdi()), son_sonuc=sonuc))
+                if not sessiz:
+                    self.bildir(sonuc, GIDER)
+                return
+            turler = self.fatura_turleri()
+            for mail in sorted(mailler, key=lambda x: x["tarih"]):
+                try:
+                    f = await self.arka(ak.mail_fatura_coz, mail, self.gemini_anahtari, turler)
+                except Exception as ex:
+                    print("Mail okunamadı:", ex)
+                    hatalar += 1
+                    continue  # görülmedi say: sonra tekrar denensin
+                gorulen.add(mail["id"])
+                if f.get("ekstre_mi") and mail.get("pdfler"):
+                    ekstreler.append(mail)
+                    continue
+                if not f.get("fatura_mi"):
+                    continue
+                k = await self._mail_faturasi_kaydet(f, mail)
+                if k:
+                    eklenen.append(k)
+            self._yerel_yaz("mail_gorulen", list(gorulen)[-800:])
+            if ekstreler:
+                self._bekleyen_ekstre = ekstreler[-1]
+            sonuc = (f"{len(eklenen)} yeni fatura" if eklenen else "yeni fatura yok") + \
+                    (f", {len(ekstreler)} kart ekstresi" if ekstreler else "") + (f", {hatalar} mail okunamadı" if hatalar else "")
+            self._yerel_ayar_yaz(mail=dict(self.mail_ayari() or a, son_kontrol=hb.iso_tarih(hb.simdi()), son_sonuc=sonuc))
+            if eklenen:
+                self.bildir("📧 " + ", ".join(f"{k['tur']} {hb.tl(k['tutar'])}" for k in eklenen[:3]) + " faturası e-postadan eklendi",
+                            GELIR)
+                await self.ek_verileri_yenile()
+            elif not sessiz:
+                self.bildir(f"📧 E-posta kontrol edildi: {sonuc}")
+            if ekstreler and not sessiz:
+                self.ekstre_mail_sor()
+            self.ekrani_ciz()
+        finally:
+            self._mail_calisiyor = False
+
+    async def _mail_faturasi_kaydet(self, f, mail):
+        # aynı fatura elle eklenmişse tekrar ekleme
+        for x in self.ek.get("faturalar", []):
+            if x.get("tur") == f["tur"] and abs(float(x.get("tutar") or 0) - f["tutar"]) < 0.01 and \
+                    (str(x.get("son_odeme") or "")[:10] == (f.get("son_odeme") or "") or (x.get("donem") and x.get("donem") == f.get("donem"))):
+                return None
+        abone = None
+        for ab in self.ek.get("abonelikler", []):
+            if f.get("abone_no") and ab.get("abone_no") and hb.urun_anahtari(ab["abone_no"]) == hb.urun_anahtari(f["abone_no"]):
+                abone = ab
+                break
+        if abone is None:
+            abone = next((ab for ab in self.ek.get("abonelikler", []) if ab.get("tur") == f["tur"] and not ab.get("abone_no")), None)
+        gorsel = None
+        if f.get("pdf"):
+            try:
+                gorsel = await self.arka(self.supa.fis_yukle, f["pdf"], "pdf", "application/pdf")
+            except Exception:
+                gorsel = None
+        varsayilan_kat = {"Kredi kartı": "Kredi Kartı, Kredi Ödemesi & Borç"}
+        kayit = {"tur": f["tur"], "kurum": f.get("kurum"), "abone_no": f.get("abone_no"), "donem": f.get("donem"),
+                 "fatura_tarihi": f.get("fatura_tarihi"), "son_odeme": f.get("son_odeme"), "tuketim": f.get("tuketim"),
+                 "birim": f.get("birim"), "birim_fiyat": f.get("birim_fiyat"), "tutar": f["tutar"], "gorsel": gorsel,
+                 "kasa_sahibi": (abone or {}).get("kasa_sahibi") or self.ben["id"], "mail_id": "gmail:" + str(mail["id"]),
+                 "kategori": varsayilan_kat.get(f["tur"], "Kira & Aidat & Faturalar")}
+        onceki = next((x for x in sorted(self.ek["faturalar"], key=lambda x: x.get("fatura_tarihi") or x.get("son_odeme") or "",
+                                         reverse=True) if x["tur"] == kayit["tur"]), None)
+        try:
+            kayit["analiz"] = ak.fatura_karsilastir(kayit, onceki)
+        except Exception:
+            pass
+        try:
+            sonuc = await self.arka(self.supa.fatura_mailden_ekle, kayit)
+        except hb.ApiHatasi as ex:
+            print("Mail faturası eklenemedi:", ex)
+            return None
+        if not sonuc:
+            return None  # başka cihaz eklemiş
+        self.ek.setdefault("faturalar", []).insert(0, sonuc[0] if isinstance(sonuc[0], dict) else kayit)
+        if f.get("abone_no") and not any(hb.urun_anahtari(ab.get("abone_no") or "") == hb.urun_anahtari(f["abone_no"])
+                                         for ab in self.ek.get("abonelikler", [])):
+            try:
+                gun = dt.date.fromisoformat(f["fatura_tarihi"]).day if f.get("fatura_tarihi") else mail["tarih"].day
+                yeni = {"tur": f["tur"], "kurum": f.get("kurum"), "abone_no": f["abone_no"], "beklenen_gun": gun,
+                        "kasa_sahibi": kayit["kasa_sahibi"], "not_": "E-postadan otomatik eklendi"}
+                await self.arka(self.supa.tablo_ekle, "hb_abonelikler", yeni)
+                self.ek.setdefault("abonelikler", []).append(yeni)
+            except Exception as ex:
+                print("Abonelik eklenemedi:", ex)
+        return kayit
+
+    def ekstre_mail_sor(self):
+        mail = getattr(self, "_bekleyen_ekstre", None)
+        if not mail:
+            return
+
+        async def isle(e):
+            self.dialog_kapat(d)
+            self._bekleyen_ekstre = None
+            self.planla_ac("taksitler")
+            await self.ekstre_isle(mail["pdfler"][0][1], "pdf")
+
+        d = ft.AlertDialog(title=yazi("E-postada kart ekstresi var", 17, True),
+                           content=yazi(f"{mail.get('konu') or 'Hesap özeti'} ({mail['tarih']:%d.%m.%Y}). Taksitleri bu ekstreden "
+                                        "güncelleyelim mi?", 13),
+                           actions=[buton("Sonra", lambda e: self.dialog_kapat(d), tip="text"),
+                                    buton("Taksitleri güncelle", isle, ft.Icons.CREDIT_CARD_ROUNDED)])
+        self.dialog_ac(d)
+
+    def mail_otomatik(self, en_az_saat):
+        a = self.mail_ayari()
+        if not a.get("sifre"):
+            return False
+        son = a.get("son_kontrol")
+        return not son or (hb.simdi() - hb.tarih_yerel(son)).total_seconds() > en_az_saat * 3600
+
+    # ================================================================== abonelikler
+    def abonelik_faturasi(self, ab):
+        for f in self.ek.get("faturalar", []):
+            if ab.get("abone_no") and f.get("abone_no") and hb.urun_anahtari(f["abone_no"]) == hb.urun_anahtari(ab["abone_no"]):
+                return f
+            if not ab.get("abone_no") and f.get("tur") == ab.get("tur"):
+                return f
+        return None
+
+    def abonelik_hatirlatmalari(self):
+        bugun = hb.simdi().date()
+        sonuc = []
+        for ab in self.ek.get("abonelikler", []):
+            if not ab.get("aktif", True) or not ab.get("beklenen_gun"):
+                continue
+            if not self.yonetici and ab.get("kasa_sahibi") != self.ben["id"]:
+                continue
+            if bugun.day < int(ab["beklenen_gun"]) + 5:
+                continue
+            f = self.abonelik_faturasi(ab)
+            tarih = None
+            if f:
+                try:
+                    tarih = dt.date.fromisoformat(str(f.get("fatura_tarihi") or f.get("olusturma") or "")[:10])
+                except Exception:
+                    tarih = None
+            if tarih and (bugun - tarih).days < 25:
+                continue
+            sonuc.append({"seviye": "yakin", "metin": f"📭 {ab['tur']} faturası bu ay henüz gelmedi"
+                                                          + (f" ({ab['kurum']})" if ab.get("kurum") else ""),
+                          "sayfa": "abonelikler"})
+        return sonuc
+
+    def sayfa_abonelikler(self):
+        ogeler = [kart(yazi("Su, doğalgaz, elektrik, internet, telefon gibi aboneliklerinizi buradan izleyin. E-postadan gelen "
+                            "faturalar abone numarasıyla eşleşir; beklenen günden 5 gün sonra fatura gelmemişse uyarılırsınız.",
+                            12, renk=ui.SOLUK)),
+                  ft.Row([buton("Abonelik ekle", lambda e: self.abonelik_duzenle(), ft.Icons.ADD_ROUNDED, expand=True),
+                          buton("E-postayı kontrol et", lambda e: self.page.run_task(self.mail_kontrol, False),
+                                ft.Icons.MARK_EMAIL_UNREAD_ROUNDED, tip="outlined", expand=True)], spacing=8)]
+        if not self.mail_ayari().get("sifre"):
+            ogeler.append(kart(yazi("E-posta bağlı değil: Menü > Ayarlar > “E-postadan fatura takibi”nden Gmail'inizi bağlayın.",
+                                    12, renk="#b45309"), renk=ui.UYARI_ZEMIN, dolgu=12))
+        from hb_ek import FATURA_SIMGE, _ikon
+        for ab in self.ek.get("abonelikler", []):
+            if not self.yonetici and ab.get("kasa_sahibi") != self.ben["id"]:
+                continue
+            simge, renk = FATURA_SIMGE.get(ab["tur"], FATURA_SIMGE["Diğer"])
+            f = self.abonelik_faturasi(ab)
+            alt = [x for x in [ab.get("kurum"), f"Abone no {ab['abone_no']}" if ab.get("abone_no") else None,
+                               f"Her ayın ~{ab['beklenen_gun']}'i" if ab.get("beklenen_gun") else None] if x]
+            son = (f"Son fatura: {hb.tl(f['tutar'])}" + (f" • {f['donem']}" if f.get("donem") else "")
+                   + (" • ödendi" if f.get("odendi") else " • ödenmedi")) if f else "Henüz fatura yok"
+            ogeler.append(ft.Container(content=ft.Row([
+                simge_kutusu(_ikon(simge), renk, 18, 38),
+                ft.Column([yazi(ab["tur"], 14, True), yazi(" • ".join(alt), 11, renk=ui.SOLUK),
+                           yazi(son, 11.5, "sb", renk=ui.YAZI if f else ui.SOLUK)], spacing=1, expand=True),
+                ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.SOLUK)], spacing=10),
+                bgcolor=ui.KART, border_radius=18, padding=12, border=ui.kenar() if ui.KOYU else None,
+                shadow=None if ui.KOYU else golge(0.4), opacity=1 if ab.get("aktif", True) else 0.5,
+                on_click=lambda e, ab=ab: self.abonelik_duzenle(ab)))
+        if not self.ek.get("abonelikler"):
+            ogeler.append(kart(yazi("Henüz abonelik yok. E-postadan fatura geldikçe kendiliğinden eklenir ya da elle ekleyin.",
+                                    12.5, renk=ui.SOLUK)))
+        return self._liste(ogeler)
+
+    def abonelik_duzenle(self, ab=None):
+        ab = ab or {}
+        tur = acilir("Tür", self.fatura_turleri(), ab.get("tur") or "Elektrik")
+        kurum = ft.TextField(label="Kurum (örn. Palen, ESKİ, Türk Telekom)", value=ab.get("kurum") or "", dense=True)
+        no = ft.TextField(label="Abone / tesisat / müşteri no", value=ab.get("abone_no") or "", dense=True)
+        gun = ft.TextField(label="Fatura genelde ayın kaçında gelir?", value=str(ab.get("beklenen_gun") or ""), dense=True,
+                           keyboard_type=ft.KeyboardType.NUMBER)
+        aktif = ft.Switch(label="Aktif", value=ab.get("aktif", True))
+        kasa = self._kasa_secici(ab.get("kasa_sahibi"))
+
+        async def kaydet():
+            g = int(hb.tutar_coz(gun.value) or 0) or None
+            kayit = {"tur": tur.value, "kurum": (kurum.value or "").strip() or None, "abone_no": (no.value or "").strip() or None,
+                     "beklenen_gun": g if g and 1 <= g <= 31 else None, "aktif": bool(aktif.value),
+                     "kasa_sahibi": kasa.value if self.yonetici else self.ben["id"]}
+            if ab.get("id"):
+                await self._islem(self.supa.tablo_guncelle, "hb_abonelikler", ab["id"], kayit, basari="Güncellendi ✓")
+            else:
+                await self._islem(self.supa.tablo_ekle, "hb_abonelikler", kayit, basari="Abonelik eklendi ✓")
+
+        def sil(d):
+            async def s(e):
+                self.dialog_kapat(d)
+                await self._islem(self.supa.tablo_sil, "hb_abonelikler", ab["id"], basari="Silindi")
+            return buton("Sil", s, tip="text")
+
+        self._girdi_dialog("Aboneliği düzenle" if ab.get("id") else "Yeni abonelik",
+                           [tur, kurum, no, gun, aktif] + ([yazi("Kimin kasasından ödenir?", 12, renk=ui.SOLUK), kasa]
+                                                            if self.yonetici else []), kaydet,
+                           ek_eylem=sil if ab.get("id") else None)

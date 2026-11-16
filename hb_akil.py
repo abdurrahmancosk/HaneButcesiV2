@@ -1013,3 +1013,156 @@ Kurallar:
             "hesap_kesim": _t(sonuc.get("hesap_kesim")), "son_odeme": _t(sonuc.get("son_odeme")),
             "donem_borcu": hb.tutar_coz(sonuc.get("donem_borcu")), "asgari": hb.tutar_coz(sonuc.get("asgari")),
             "taksitler": taksitler, "diger": diger}
+
+
+# ----------------------------------------------------------------------------
+# E-postadan fatura takibi (Gmail IMAP + uygulama şifresi)
+# ----------------------------------------------------------------------------
+GMAIL_IMAP = "imap.gmail.com"
+MAIL_SORGU = 'newer_than:{gun}d -in:chats -category:promotions (fatura OR "e-fatura" OR "e-arşiv" OR "son ödeme" ' \
+             'OR "fatura tutarı" OR "ödenecek tutar" OR "hesap özeti" OR abone)'
+
+
+def _mail_metin(msg) -> tuple[str, list[tuple[str, bytes]]]:
+    """E-postanın düz metni (HTML'den arındırılmış) ve PDF ekleri."""
+    import html as _html
+    duz, htm, ekler = [], [], []
+    for parca in msg.walk():
+        tip = parca.get_content_type()
+        dosya = parca.get_filename() or ""
+        if parca.is_multipart():
+            continue
+        try:
+            veri = parca.get_payload(decode=True) or b""
+        except Exception:
+            continue
+        if tip == "application/pdf" or dosya.lower().endswith(".pdf"):
+            if len(veri) < 8_000_000:
+                ekler.append((dosya or "fatura.pdf", veri))
+            continue
+        if tip in ("text/plain", "text/html") and "attachment" not in str(parca.get("Content-Disposition") or ""):
+            cs = parca.get_content_charset() or "utf-8"
+            try:
+                metin = veri.decode(cs, "replace")
+            except Exception:
+                metin = veri.decode("utf-8", "replace")
+            (duz if tip == "text/plain" else htm).append(metin)
+    metin = "\n".join(duz)
+    if not metin.strip() and htm:
+        h = "\n".join(htm)
+        h = re.sub(r"(?is)<(script|style).*?</\1>", " ", h)
+        h = re.sub(r"(?i)<br\s*/?>|</p>|</tr>|</div>", "\n", h)
+        metin = _html.unescape(re.sub(r"<[^>]+>", " ", h))
+    metin = re.sub(r"[ \t\xa0]+", " ", metin)
+    metin = re.sub(r"\n\s*\n+", "\n", metin).strip()
+    return metin[:6000], ekler
+
+
+def _baslik(deger) -> str:
+    from email.header import decode_header, make_header
+    try:
+        return str(make_header(decode_header(deger or "")))
+    except Exception:
+        return str(deger or "")
+
+
+def mail_baglanti_dene(adres: str, sifre: str) -> str:
+    import imaplib
+    m = imaplib.IMAP4_SSL(GMAIL_IMAP, 993, ssl_context=hb.SSL)
+    try:
+        m.login(adres, sifre.replace(" ", ""))
+        return "ok"
+    finally:
+        try:
+            m.logout()
+        except Exception:
+            pass
+
+
+def mail_faturalari_getir(adres: str, sifre: str, gun: int = 45, gorulen: set | None = None, en_fazla: int = 25) -> list[dict]:
+    """Son {gun} gündeki fatura olabilecek e-postaları getirir (okunmadı olarak bırakır).
+    -> [{"id", "kimden", "konu", "tarih", "metin", "pdfler": [(ad, bytes)]}]"""
+    import email
+    import imaplib
+    from email.utils import parsedate_to_datetime
+    gorulen = gorulen or set()
+    m = imaplib.IMAP4_SSL(GMAIL_IMAP, 993, ssl_context=hb.SSL)
+    sonuc = []
+    try:
+        m.login(adres, sifre.replace(" ", ""))
+        klasor = '"INBOX"'
+        typ, kutular = m.list()
+        for k in kutular or []:
+            s = k.decode("utf-8", "replace") if isinstance(k, bytes) else str(k)
+            if "\\All" in s:  # Gmail "Tüm Postalar" (arşivlenenler dahil), dil fark etmez
+                klasor = s.split(' "/" ')[-1].strip()
+                break
+        m.select(klasor, readonly=True)
+        m.literal = MAIL_SORGU.format(gun=gun).encode("utf-8")
+        typ, veri = m.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
+        uidler = (veri[0] or b"").split() if veri else []
+        for uid in list(reversed(uidler))[:en_fazla * 2]:
+            typ, d = m.uid("FETCH", uid, "(X-GM-MSGID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+            ham = b"".join(x[1] for x in d if isinstance(x, tuple)) if d else b""
+            mid = re.search(rb"X-GM-MSGID (\d+)", b" ".join(x[0] if isinstance(x, tuple) else x for x in d if x)) if d else None
+            kimlik = (mid.group(1).decode() if mid else uid.decode())
+            if kimlik in gorulen:
+                continue
+            typ, d = m.uid("FETCH", uid, "(BODY.PEEK[])")
+            govde = next((x[1] for x in d if isinstance(x, tuple)), None) if d else None
+            if not govde:
+                continue
+            msg = email.message_from_bytes(govde)
+            metin, pdfler = _mail_metin(msg)
+            try:
+                tarih = parsedate_to_datetime(msg.get("Date")).astimezone(hb.TZ)
+            except Exception:
+                tarih = hb.simdi()
+            sonuc.append({"id": kimlik, "kimden": _baslik(msg.get("From")), "konu": _baslik(msg.get("Subject")),
+                          "tarih": tarih, "metin": metin, "pdfler": pdfler})
+            if len(sonuc) >= en_fazla:
+                break
+    finally:
+        try:
+            m.logout()
+        except Exception:
+            pass
+    return sonuc
+
+
+def mail_fatura_coz(mail: dict, api_anahtari: str, turler: list[str] | None = None) -> dict:
+    """Bir e-postanın (metin + varsa PDF) fatura olup olmadığını ve bilgilerini çıkarır."""
+    turler = turler or FATURA_TURLERI
+    pdf = None
+    for _, v in mail.get("pdfler") or []:
+        try:
+            v = pdf_sifresini_coz(v)
+        except PdfSifreli:
+            continue  # şifreli fatura PDF'i: mail metniyle yetinilir
+        pdf = v
+        break
+    istem = f"""Aşağıdaki e-posta bir kurum faturası bildirimi olabilir (elektrik, su, doğalgaz, internet, telefon, aidat, sigorta…).
+Kimden: {mail.get('kimden')}
+Konu: {mail.get('konu')}
+Tarih: {mail.get('tarih'):%d.%m.%Y}
+Metin:
+{mail.get('metin') or ''}
+{'(Faturanın PDF hali ekte.)' if pdf else ''}
+YALNIZCA şu JSON'u döndür:
+{{"fatura_mi": true, "ekstre_mi": false, "tur": "{'/'.join(turler)} değerlerinden biri", "kurum": "", "abone_no": "",
+"donem": "Ekim 2026", "fatura_tarihi": "GG.AA.YYYY", "son_odeme": "GG.AA.YYYY", "tutar": 0.0, "tuketim": null, "birim": "",
+"birim_fiyat": null}}
+Kurallar: Reklam, kampanya, ödeme dekontu/makbuz ("ödemeniz alındı"), sipariş, kargo e-postaları fatura DEĞİLDİR → fatura_mi=false.
+Kredi kartı hesap özeti ise ekstre_mi=true, fatura_mi=false. tutar ödenecek toplam tutardır. Bilmediğin alanı null yap, uydurma."""
+    j = gemini(istem, api_anahtari, gorsel=pdf, mime="application/pdf") if pdf else gemini(istem, api_anahtari)
+    if not isinstance(j, dict) or not j.get("fatura_mi"):
+        return {"fatura_mi": False, "ekstre_mi": bool(isinstance(j, dict) and j.get("ekstre_mi"))}
+    tutar = hb.tutar_coz(j.get("tutar"))
+    if not tutar:
+        return {"fatura_mi": False, "ekstre_mi": False}
+    return {"fatura_mi": True, "tur": j.get("tur") if j.get("tur") in turler else "Diğer",
+            "kurum": (j.get("kurum") or "").strip() or None, "abone_no": str(j.get("abone_no") or "").strip() or None,
+            "donem": (j.get("donem") or "").strip() or None, "fatura_tarihi": _tarih_al(j.get("fatura_tarihi")),
+            "son_odeme": _tarih_al(j.get("son_odeme")), "tutar": abs(tutar), "tuketim": hb.tutar_coz(j.get("tuketim")),
+            "birim": (j.get("birim") or "").strip() or None, "birim_fiyat": hb.tutar_coz(j.get("birim_fiyat")),
+            "pdf": pdf}

@@ -853,6 +853,8 @@ class EkOzellikler3:
         if eklenen:
             self.bildir(f"🎒 {eklenen} günlük okul harçlığı otomatik eklendi")
             await self.verileri_yenile()
+        if self.mail_otomatik(4):
+            self.page.run_task(self.mail_kontrol, True)
         await self.aktuel_yukle()
         await self.aktuel_yenile()
 

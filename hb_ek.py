@@ -31,6 +31,7 @@ MENU = [  # anahtar, başlık, açıklama, simge, renk
     ("hedefler", "Birikim hedefleri", "Tatil, araba, acil durum…", "SAVINGS_ROUNDED", "#ca8a04"),
     ("borclar", "Borç / alacak", "Kime ne verildi, kimden ne alınacak", "HANDSHAKE_ROUNDED", "#2563eb"),
     ("taksitler", "Taksitler", "Kredi kartı taksitleri, hatırlatma, ödedim", "CREDIT_CARD_ROUNDED", "#4f46e5"),
+    ("abonelikler", "Abonelikler", "Su, doğalgaz, internet… e-postadan otomatik", "MARK_EMAIL_READ_ROUNDED", "#ea4335"),
     ("sohbet", "Hane sohbeti", "Mesaj, para isteği, kayda yorum", "FORUM_ROUNDED", "#0d9488"),
     ("fiyatlar", "Fiyat takibi", "Ürün fiyatları, güncel market fiyatları", "PRICE_CHECK_ROUNDED", "#0891b2"),
     ("varliklar", "Altın & döviz", "Elinizdeki altın/döviz, güncel değeri", "DIAMOND_ROUNDED", "#ca8a04"),
@@ -60,7 +61,7 @@ class EkOzellikler:
     # ================================================================== veri
     def ek_varsayilan(self):
         self.ek = {"faturalar": [], "duzenli": [], "butceler": {}, "hedefler": [], "hedef_durum": {}, "alisveris": [],
-                   "borclar": [], "taksitler": []}
+                   "borclar": [], "taksitler": [], "abonelikler": []}
         self.ek_hazir = None
         self.alt_sayfa = None
         self.fiyat_verisi = None
@@ -86,6 +87,7 @@ class EkOzellikler:
                           hb.urllib.parse.quote(f'(alindi.eq.false,alinma.gte."{gecen_hafta}")')),
             "borclar": (s.tablo, "hb_borclar", "select=*&order=kapandi,tarih.desc&limit=200"),
             "taksitler": (s.tablo, "hb_taksitler", "select=*&order=odeme_gunu,id&limit=300"),
+            "abonelikler": (s.tablo, "hb_abonelikler", "select=*&order=tur,id"),
         }
         sonuclar = await asyncio.gather(*[self.arka(f, *a) for f, *a in isler.values()], return_exceptions=True)
         hata = 0
@@ -104,9 +106,9 @@ class EkOzellikler:
     def hatirlatmalar(self):
         h = ak.fatura_hatirlatmalari(self.ek["faturalar"]) + ak.duzenli_hatirlatmalari(self.ek["duzenli"])
         try:
-            h += self.taksit_hatirlatmalari()
+            h += self.taksit_hatirlatmalari() + self.abonelik_hatirlatmalari()
         except Exception as e:
-            print("Taksit hatırlatmaları:", e)
+            print("Taksit/abonelik hatırlatmaları:", e)
         sira = {"gecikti": 0, "bugun": 1, "yarin": 2, "yakin": 3}
         return sorted(h, key=lambda x: sira.get(x["seviye"], 9))
 
@@ -463,6 +465,18 @@ class EkOzellikler:
                                           on_click=lambda e: self.page.run_task(self.kamera_ekrani, "fatura"),
                                           tooltip="Kamerayla çek"))
         ogeler.append(ft.Row(yukle, spacing=8))
+        mail = self.mail_ayari()
+        ogeler.append(ft.Container(content=ft.Row([
+            ft.Icon(ft.Icons.MARK_EMAIL_READ_ROUNDED if mail.get("sifre") else ft.Icons.MAIL_OUTLINE_ROUNDED, color="#ea4335",
+                    size=20),
+            ft.Column([yazi("E-postadan otomatik" if mail.get("sifre") else "Faturaları e-postadan otomatik al", 13, "sb"),
+                       yazi(self._mail_durum_metni() if mail.get("sifre") else "Gmail'i bağlayın: Menü > Ayarlar", 11,
+                            renk=ui.SOLUK)], spacing=0, expand=True),
+            ft.IconButton(icon=ft.Icons.REFRESH_ROUNDED, tooltip="Şimdi kontrol et",
+                          on_click=lambda e: self.page.run_task(self.mail_kontrol, False)) if mail.get("sifre") else
+            ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.SOLUK)], spacing=10),
+            bgcolor=ui.KART, border_radius=16, padding=ft.Padding(12, 8, 6, 8), border=ui.kenar() if ui.KOYU else None,
+            on_click=(lambda e: self.menu_ac("abonelikler")) if mail.get("sifre") else (lambda e: self.menu_ac("ayarlar"))))
 
         # Düzenli ödemeler
         ay = hb.simdi().strftime("%Y-%m")

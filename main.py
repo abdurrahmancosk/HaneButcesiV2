@@ -12,7 +12,7 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.7.2"
+SURUM = "2.8.0"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler
@@ -1658,6 +1658,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             ]
 
         try:
+            kontroller.append(self.mail_karti())
             if self.yonetici:
                 kontroller.append(self.harclik_karti())
             kontroller.append(self.konum_karti())
