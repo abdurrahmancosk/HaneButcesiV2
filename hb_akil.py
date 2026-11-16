@@ -382,19 +382,77 @@ def fiyat_listesi(gecmis: list[dict], arama: str = "", en_fazla: int = 60) -> li
     return sonuc[:en_fazla]
 
 
-def alisveris_eslestir(liste: list[dict], urun_adlari: list[str], esik: float = 0.6) -> list[int]:
-    """Fişteki ürünlerle eşleşen alışveriş listesi maddelerinin id'leri."""
-    ids = []
+_BIRIM_KELIMELERI = {"kg", "gr", "g", "lt", "l", "ml", "cl", "adet", "ad", "paket", "pk", "kutu", "şişe", "sise", "demet",
+                     "metre", "m", "cm", "x", "li", "lu", "lü", "lı", "tane", "dilim", "porsiyon", "kilo", "litre", "gram"}
+
+
+_IYELIK_EKLERI = {"i", "u", "ü", "si", "su", "sü", "yi", "yu", "yü", "ni", "nu", "nü"}
+_ZARARSIZ = {"ici", "içi", "dilimi", "tanesi"}   # 'ceviz içi' hâlâ cevizdir
+
+
+def _kelimeler(metin) -> list[str]:
+    s = hb.urun_anahtari(metin).replace("'", " ").replace("’", " ")
+    return re.findall(r"[a-zçğıöşü]+", s.replace("ı", "i"))
+
+
+def _tamlama_mi(k: str) -> bool:
+    """'tozu', 'suyu', 'salçası', 'ezmesi' gibi önceki kelimeyle başka bir ürün oluşturan tamlama kelimesi mi?"""
+    return len(k) >= 3 and k not in _BIRIM_KELIMELERI and bool(re.search(r"(s|y)?[iuü]$", k)) and \
+        bool(re.search(r"(si|su|sü|yi|yu|yü|i|u|ü)$", k))
+
+
+def alisveris_eslesir(madde: str, urun: str) -> bool:
+    """Alışveriş listesi maddesi bu fiş / harcama satırıyla AYNI ürün mü? Sıkı kural (benzer isimler eşleşmez):
+    maddenin her kelimesi üründe TAM kelime olarak geçmeli ('süt' ≠ 'sütlaç', 'sütlü'); son kelimeden hemen sonra
+    'tozu / suyu / salçası / ezmesi' gibi bir tamlama geliyorsa başka üründür ('süt' ≠ 'süt tozu', 'domates' ≠
+    'domates salçası'). Sayı ve birimler ('2 lt', '30'lu') yok sayılır."""
+    mk = [k for k in _kelimeler(madde) if k not in _BIRIM_KELIMELERI]
+    uk = _kelimeler(urun)
+    if not mk or not uk:
+        return False
+    def ayni(k, u):  # 'deterjan' = 'deterjanı' (tamlama eki), ama 'süt' ≠ 'sütlaç'
+        return u == k or (u.startswith(k) and u[len(k):] in _IYELIK_EKLERI)
+
+    for k in mk:
+        if not any(ayni(k, u) for u in uk):
+            return False
+    son = max(i for i, u in enumerate(uk) if ayni(mk[-1], u))
+    sonraki = uk[son + 1] if son + 1 < len(uk) else None
+    if sonraki and sonraki not in mk and sonraki not in _ZARARSIZ and _tamlama_mi(sonraki):
+        return False
+    return True
+
+
+def alisveris_eslestir(liste: list[dict], urunler: list, en_erken_fark_saat: float = 2) -> list[tuple[int, dict | None]]:
+    """Alınmamış liste maddelerini harcama satırlarıyla eşleştirir -> [(madde_id, eşleşen satır)].
+    urunler: ürün adları (str) ya da harcama kayıtları (dict: urun, firma, tarih, id, tutar...). Kayıt, madde listeye
+    eklenmeden önce alınmışsa (2 saatten eski) sayılmaz. Bir satır yalnızca bir maddeyi işaretler."""
+    sonuc, kullanilan = [], set()
     for m in liste:
         if m.get("alindi"):
             continue
-        ad = hb.urun_anahtari(m.get("urun"))
-        for u in urun_adlari:
-            uk = hb.urun_anahtari(u)
-            if ad and (ad in uk.split() or ad in uk or _benzerlik(ad, uk) >= esik):
-                ids.append(m["id"])
+        try:
+            eklenme = hb.tarih_yerel(m.get("olusturma")) if m.get("olusturma") else None
+        except Exception:
+            eklenme = None
+        for n, u in enumerate(urunler):
+            if n in kullanilan:
+                continue
+            kayit = u if isinstance(u, dict) else None
+            ad = (kayit.get("urun") if kayit else u) or ""
+            if kayit and kayit.get("tur", "Gider") != "Gider":
+                continue
+            if kayit and eklenme and kayit.get("tarih"):
+                try:
+                    if hb.tarih_yerel(kayit["tarih"]) < eklenme - dt.timedelta(hours=en_erken_fark_saat):
+                        continue
+                except Exception:
+                    pass
+            if alisveris_eslesir(m.get("urun") or "", ad):
+                sonuc.append((m["id"], kayit))
+                kullanilan.add(n)
                 break
-    return ids
+    return sonuc
 
 
 # ----------------------------------------------------------------------------

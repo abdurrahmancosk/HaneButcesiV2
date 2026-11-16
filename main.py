@@ -14,7 +14,7 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.15.0"
+SURUM = "2.16.0"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler
@@ -586,6 +586,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                                                                  "select=*&order=tarih.desc,id.desc&limit=20000"))
             if self.bekleyenler:
                 self.page.run_task(self.bekleyenleri_gonder)
+            if any(not m.get("alindi") for m in self.ek.get("alisveris") or []):
+                self.page.run_task(self.alisveris_otomatik)  # fişte / harcamada geçen liste ürünlerini işaretle
             if getattr(self, "_hazir", False) and self.ben:
                 try:
                     self.gunluk_limit_uyar()
@@ -1901,7 +1903,6 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                         print("Eşleme kaydedilemedi:", ex)
                 self.fis = None
                 self.fiyat_verisi = None
-                self.page.run_task(self.alisverisi_isaretle, [k["urun"] for k in kayitlar])
                 self.bildir(f"Fiş kaydedildi ✓ {len(kayitlar)} ürün • "
                             f"{hb.tl(sum(k['tutar'] for k in kayitlar))}", GELIR)
                 await self.verileri_yenile(ciz=False)

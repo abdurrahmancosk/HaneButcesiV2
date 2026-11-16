@@ -947,16 +947,20 @@ class EkOzellikler:
         ogeler = [ft.Container(content=ft.Row([ft.Icon(ft.Icons.ADD_SHOPPING_CART_ROUNDED, color=GELIR), urun,
                                                ft.IconButton(icon=ft.Icons.ADD_CIRCLE_ROUNDED, icon_color=GELIR, on_click=ekle)]),
                                bgcolor=ui.KART, border_radius=18, padding=ft.Padding(14, 2, 4, 2), shadow=golge(0.5)),
-                  yazi("Virgülle birden çok ürün ekleyebilirsiniz. Fiş kaydedilince eşleşen ürünler otomatik işaretlenir.",
+                  yazi("Virgülle birden çok ürün ekleyebilirsiniz. Fişte ya da harcamada aynı ürün geçince kendiliğinden "
+                       "“alındı” olur (benzer isimler – süt / sütlaç / süt tozu – eşleşmez). Ürüne dokunup nereden, ne zaman, "
+                       "kaça aldığınızı da yazabilirsiniz.",
                        11, renk=ui.SOLUK)]
         ogeler.append(yazi(f"Alınacaklar ({len(bekleyen)})", 15, True))
         for a in bekleyen:
             ogeler.append(ft.Container(content=ft.Row([
                 ft.Checkbox(value=False, on_change=lambda e, a=a: self.page.run_task(degistir, a, True)),
-                ft.Column([yazi(a["urun"], 14, True), yazi(f"{a.get('ekleyen_ad') or ''} ekledi • "
-                                                          f"{hb.tarih_yerel(a.get('olusturma')):%d.%m %H:%M}", 10.5, renk=ui.SOLUK),
-                           *self.aktuel_rozeti(a["urun"])],
-                          spacing=0, expand=True),
+                ft.Container(content=ft.Column([
+                    yazi(a["urun"], 14, True), yazi(f"{a.get('ekleyen_ad') or ''} ekledi • "
+                                                    f"{hb.tarih_yerel(a.get('olusturma')):%d.%m %H:%M} • dokunun: nereden, kaça?",
+                                                    10.5, renk=ui.SOLUK),
+                    *self.aktuel_rozeti(a["urun"])], spacing=0),
+                    expand=True, on_click=lambda e, a=a: self.alisveris_aldim(a)),
                 ft.IconButton(icon=ft.Icons.DELETE_OUTLINE_ROUNDED, icon_size=18,
                               on_click=lambda e, a=a: self.page.run_task(self._islem, self.supa.tablo_sil, "hb_alisveris", a["id"]))]),
                 bgcolor=ui.KART, border_radius=14, padding=ft.Padding(4, 2, 4, 2)))
@@ -966,10 +970,13 @@ class EkOzellikler:
             ogeler.append(ft.Row([yazi(f"Alındı ({len(alinan)})", 15, True, expand=True),
                                   buton("Temizle", temizle, ft.Icons.CLEANING_SERVICES_ROUNDED, tip="text")]))
             for a in alinan:
+                ad = (yazi(a["urun"], 13, renk=ui.SOLUK, style=ft.TextStyle(decoration=_UZERI_CIZILI))
+                      if _UZERI_CIZILI is not None else yazi(a["urun"], 13, renk=ui.SOLUK))
+                bilgi = self.alisveris_bilgisi(a)
                 ogeler.append(ft.Container(content=ft.Row([
                     ft.Checkbox(value=True, on_change=lambda e, a=a: self.page.run_task(degistir, a, False)),
-                    yazi(a["urun"], 13, renk=ui.SOLUK, expand=True, style=ft.TextStyle(decoration=_UZERI_CIZILI))
-                    if _UZERI_CIZILI is not None else yazi(a["urun"], 13, renk=ui.SOLUK, expand=True)]),
+                    ft.Container(content=ft.Column([ad, *([yazi(bilgi, 10.5, renk=ui.SOLUK)] if bilgi else [])], spacing=0),
+                                 expand=True, on_click=lambda e, a=a: self.alisveris_aldim(a))]),
                     border_radius=14, padding=ft.Padding(4, 0, 4, 0)))
         if bekleyen:
             ogeler.insert(1, ft.Container(content=ft.Row([
@@ -982,16 +989,153 @@ class EkOzellikler:
                 on_click=self.listeyi_en_ucuza))
         return self._liste(ogeler)
 
-    async def alisverisi_isaretle(self, urun_adlari):
+    def alisveris_bilgisi(self, a):
+        """Alınan ürünün 'Migros • 16.11 18:20 • 2 lt • 45,90 ₺ • Hatice' özeti."""
+        parca = []
+        if a.get("alis_yeri"):
+            parca.append(a["alis_yeri"])
+        if a.get("alinma"):
+            try:
+                parca.append(f"{hb.tarih_yerel(a['alinma']):%d.%m %H:%M}")
+            except Exception:
+                pass
+        if a.get("alis_miktar"):
+            parca.append(str(a["alis_miktar"]))
+        if a.get("alis_tutar") not in (None, ""):
+            parca.append(hb.tl(a["alis_tutar"]))
+        if a.get("alan_ad"):
+            parca.append(a["alan_ad"])
+        return " • ".join(parca)
+
+    async def _alisveris_guncelle(self, mid, alanlar):
         try:
-            ids = ak.alisveris_eslestir(self.ek["alisveris"], urun_adlari)
-            for i in ids:
-                await self.arka(self.supa.tablo_guncelle, "hb_alisveris", i, {"alindi": True, "alinma": hb.iso_tarih(hb.simdi())})
-            if ids:
-                self.bildir(f"🛒 Alışveriş listesinden {len(ids)} ürün işaretlendi")
+            await self.arka(self.supa.tablo_guncelle, "hb_alisveris", mid, alanlar)
+        except hb.ApiHatasi as e:
+            if e.durum in (400, 404) and any(k in alanlar for k in ("islem_id", "alis_yeri", "alis_tutar")):
+                # guncelleme_14.sql çalıştırılmadıysa yalnızca alındı bilgisi
+                await self.arka(self.supa.tablo_guncelle, "hb_alisveris", mid,
+                                {k: v for k, v in alanlar.items() if k in ("alindi", "alinma")})
+            else:
+                raise
+
+    def _alis_alanlari(self, kayit):
+        """Harcama kaydından liste maddesine yazılacak bilgiler (gizli harcamanın yeri/tutarı Hatice'ye yazılmaz)."""
+        a = {"alindi": True, "alinma": (kayit or {}).get("tarih") or hb.iso_tarih(hb.simdi())}
+        if not (kayit or {}).get("gizli"):
+            a["alan_ad"] = (kayit or {}).get("ekleyen_ad") or (self.ben.get("ad") if self.ben else None)
+        if kayit and not kayit.get("gizli"):
+            a.update({"alis_yeri": kayit.get("firma") or None, "alis_tutar": kayit.get("tutar"),
+                      "alis_miktar": kayit.get("miktar") or None})
+            if kayit.get("id"):
+                a["islem_id"] = kayit["id"]
+        return a
+
+    async def alisverisi_isaretle(self, urunler, sessiz=False):
+        """Fişteki / harcamadaki ürünlerle AYNI olan liste maddelerini 'alındı' yapar (sıkı eşleştirme)."""
+        try:
+            eslesen = ak.alisveris_eslestir(self.ek["alisveris"], urunler)
+            for mid, kayit in eslesen:
+                await self._alisveris_guncelle(mid, self._alis_alanlari(kayit))
+            if eslesen:
+                adlar = [next((m["urun"] for m in self.ek["alisveris"] if m["id"] == mid), "") for mid, _ in eslesen]
+                self.bildir(f"🛒 Listeden alındı: {', '.join(adlar)[:80]}")
                 await self.ek_verileri_yenile()
+                if self.sekme == 4 and self.alt_sayfa == "alisveris" or self.sekme == 5:
+                    self.ekrani_ciz(_koru=True)
         except Exception as e:
             print("Alışveriş eşleştirme:", e)
+
+    async def alisveris_otomatik(self):
+        """Veriler yenilenince: liste maddesi eklendikten sonra girilen harcamalarda (fiş, elle, sesli, eşinizin
+        kaydı) aynı ürün varsa işaretle."""
+        bekleyen = [m for m in self.ek.get("alisveris") or [] if not m.get("alindi")]
+        if not bekleyen or getattr(self, "_alisveris_kontrol", False):
+            return
+        self._alisveris_kontrol = True
+        try:
+            en_eski = min(hb.tarih_yerel(m["olusturma"]) for m in bekleyen if m.get("olusturma"))
+            adaylar = [i for i in self.islemler if i.get("tur") == "Gider" and i.get("tarih")
+                       and hb.tarih_yerel(i["tarih"]) >= en_eski - dt.timedelta(hours=2)]
+            if adaylar:
+                await self.alisverisi_isaretle(adaylar)
+        except Exception as e:
+            print("Alışveriş otomatik kontrol:", e)
+        finally:
+            self._alisveris_kontrol = False
+
+    def alisveris_aldim(self, a):
+        """Liste maddesine dokununca: nereden, ne zaman, ne kadar, kaça alındı → harcama olarak da kaydedilir."""
+        if a.get("alindi") and a.get("islem_id"):
+            i = next((x for x in self.islemler if x.get("id") == a["islem_id"]), None)
+            if i:
+                self.islem_detay(i)
+                return
+        firma = ft.TextField(label="Nereden? (market / yer)", value=a.get("alis_yeri") or "", dense=True,
+                             prefix_icon=ft.Icons.STOREFRONT_ROUNDED)
+        tarih = ft.TextField(label="Ne zaman? (GG.AA.YYYY SS:DD)", dense=True, prefix_icon=ft.Icons.EVENT_ROUNDED,
+                             value=(hb.tarih_goster(a["alinma"]) if a.get("alinma") else hb.simdi().strftime("%d.%m.%Y %H:%M")))
+        miktar_satir, miktar_oku = self.miktar_alani(a.get("alis_miktar") or a.get("miktar"), "Ne kadar?")
+        tutar = ft.TextField(label="Kaça? (₺)", dense=True, keyboard_type=ft.KeyboardType.NUMBER,
+                             value=(f"{float(a['alis_tutar']):.2f}".replace(".", ",") if a.get("alis_tutar") not in (None, "") else ""),
+                             prefix_icon=ft.Icons.PAYMENTS_ROUNDED)
+        harcama = ft.Checkbox(label="Harcama olarak da kaydet", value=not a.get("islem_id"))
+        gizli = ft.Checkbox(label="Hatice'den gizle", value=bool(getattr(self, "gizli_varsayilan", False))) \
+            if self.yonetici and len(self.profiller) > 1 else None
+
+        def kategori_bul(ad):
+            k = hb.urun_anahtari(ad)
+            if self.eslemeler and k in self.eslemeler:
+                return self.eslemeler[k]
+            for i in self.islemler:
+                if i.get("tur") == "Gider" and ak.alisveris_eslesir(ad, i.get("urun") or "") and i.get("kategori"):
+                    return i["kategori"]
+            return "Market & Temel Gıda"
+
+        async def kaydet():
+            t = hb.tutar_coz(tutar.value) if (tutar.value or "").strip() else None
+            if (tutar.value or "").strip() and (t is None or t < 0):
+                self.bildir("Tutar geçersiz", GIDER)
+                return False
+            try:
+                zaman = hb.tarih_coz(tarih.value)
+            except Exception:
+                self.bildir("Tarih anlaşılamadı (GG.AA.YYYY SS:DD)", GIDER)
+                return False
+            kayit = None
+            if harcama.value and t:
+                kayit = {"tur": "Gider", "tarih": hb.iso_tarih(zaman), "firma": (firma.value or "").strip() or None,
+                         "urun": a["urun"], "kategori": kategori_bul(a["urun"]), "miktar": miktar_oku(), "tutar": t,
+                         "aciklama": "Alışveriş listesinden", "kasa_sahibi": self.ben["id"]}
+                if gizli is not None and gizli.value:
+                    kayit["gizli"] = True
+                try:
+                    eklenen = await self.arka(self.supa.islem_ekle, [kayit])
+                    if eklenen:
+                        kayit = {**kayit, **eklenen[0]}
+                except Exception as ex:
+                    self.bildir(f"Harcama kaydedilemedi: {ex}", GIDER)
+                    return False
+            alanlar = self._alis_alanlari(kayit)
+            alanlar["alinma"] = hb.iso_tarih(zaman)
+            if not kayit or kayit.get("gizli") is not True:
+                alanlar.update({"alis_yeri": (firma.value or "").strip() or None, "alis_tutar": t,
+                                "alis_miktar": miktar_oku()})
+            try:
+                await self._alisveris_guncelle(a["id"], alanlar)
+            except Exception as ex:
+                self.bildir(f"Kaydedilemedi: {ex}", GIDER)
+                return False
+            self.bildir(f"✓ {a['urun']} alındı" + (f" • {hb.tl(t)} harcama eklendi" if kayit else ""), GELIR)
+            await self.ek_verileri_yenile()
+            if kayit:
+                await self.verileri_yenile(ciz=False)
+            self.ekrani_ciz(_koru=True)
+
+        alanlar = [yazi("Fiş girmeden hızlıca: bilgiler listede görünür, tutar yazarsanız harcama olarak da eklenir.",
+                        11.5, renk=ui.SOLUK), firma, self.takvimli(tarih, saat=True), miktar_satir, tutar, harcama]
+        if gizli is not None:
+            alanlar.append(gizli)
+        self._girdi_dialog(f"{a['urun']} – aldım", alanlar, kaydet, "Alındı")
 
     # ================================================================== borç / alacak
     def sayfa_borclar(self):
