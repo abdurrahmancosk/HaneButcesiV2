@@ -12,7 +12,7 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.9.1"
+SURUM = "2.10.0"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler
@@ -101,6 +101,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             print("Arayüz güncellenemedi:", e)
 
     def dialog_ac(self, d):
+        if not isinstance(d, getattr(ft.SnackBar, "__wrapped__", ft.SnackBar)):
+            self._dialoglar = [x for x in getattr(self, "_dialoglar", []) if getattr(x, "open", True)] + [d]
         if hasattr(self.page, "show_dialog"):
             self.page.show_dialog(d)
         elif hasattr(self.page, "open"):
@@ -111,16 +113,33 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             self.guncelle()
 
     def dialog_kapat(self, d=None):
+        """Belirtilen (ya da en son açılan) pencereyi kapatır. Üstte bir bildirim (SnackBar) varken onu değil,
+        pencerenin kendisini kapatır."""
+        yigin = getattr(self, "_dialoglar", [])
+        if d is None:
+            d = yigin[-1] if yigin else None
+        if d is not None and d in yigin:
+            yigin.remove(d)
         try:
-            if hasattr(self.page, "pop_dialog"):
-                self.page.pop_dialog()
-            elif hasattr(self.page, "close") and d is not None:
-                self.page.close(d)
-            elif d is not None:
-                d.open = False
+            if d is None:
+                if hasattr(self.page, "pop_dialog"):
+                    self.page.pop_dialog()
+                return
+            if hasattr(self.page, "close") and not hasattr(self.page, "show_dialog"):
+                self.page.close(d)  # Flet 0.2x
+                return
+            d.open = False
+            try:
+                d.update()
+            except Exception:
                 self.guncelle()
-        except Exception:
-            pass
+        except Exception as e:
+            print("Pencere kapatılamadı:", e)
+            try:
+                if hasattr(self.page, "pop_dialog"):
+                    self.page.pop_dialog()
+            except Exception:
+                pass
 
     def bildir(self, metin, renk=None):
         self.dialog_ac(ft.SnackBar(content=ft.Text(metin, color="white"), bgcolor=renk or "#334155"))
@@ -354,6 +373,11 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                                                     "select=*&order=tarih.desc,id.desc&limit=20000")
             if self.bekleyenler:
                 self.page.run_task(self.bekleyenleri_gonder)
+            if getattr(self, "_hazir", False) and self.ben:
+                try:
+                    self.gunluk_limit_uyar()
+                except Exception as e:
+                    print("Günlük limit uyarısı:", e)
             elif onceki_cevrimdisi and ciz:
                 self.bildir("🌐 İnternet bağlantısı geri geldi", GELIR)
         except Exception as e:
@@ -588,7 +612,13 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             kb = self.kisi_butce_karti(pid)
             if kb:
                 butce_kartlari.append(kb)
-        kontroller = [ust, *ek_kartlar, kasa_karti, *butce_kartlari, *self.ozet_ekleri(), self.donem_cubugu()]
+        try:
+            gk = None if tum else self.gunluk_limit_karti()
+        except Exception as e:
+            print("Günlük limit kartı:", e)
+            gk = None
+        kontroller = [ust, *ek_kartlar, kasa_karti, *([gk] if gk else []), *butce_kartlari, *self.ozet_ekleri(),
+                      self.donem_cubugu()]
 
         kontroller.append(ft.Row([
             self._ozet_kutu("Gelir", oz["gelir"], GELIR, ft.Icons.SOUTH_WEST_ROUNDED),
@@ -892,10 +922,11 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             eylemler.append(buton("Fişi gör", gorsel, ft.Icons.IMAGE_ROUNDED, tip="text"))
         if all(self.izinli(x) for x in satirlar):
             eylemler.append(buton("Fişi sil", sil_onay, ft.Icons.DELETE_ROUNDED, tip="text"))
-        if len(self.profiller) > 1 and i.get("id") not in (None, -1):
+        if len(self.profiller) > 1 and ilk.get("id") not in (None, -1):
             def yorum(e):
                 self.dialog_kapat(d)
-                self.yorum_yaz(i)
+                self.yorum_yaz(dict(ilk, tutar=sum(float(x.get("tutar") or 0) for x in satirlar),
+                                    urun=f"Fiş ({len(satirlar)} kalem)"))
             eylemler.insert(0, buton("Yorum yaz", yorum, ft.Icons.CHAT_BUBBLE_OUTLINE_ROUNDED, tip="text"))
         eylemler.append(buton("Kapat", lambda e: self.dialog_kapat(d), tip="text"))
         d.actions = eylemler
@@ -1137,6 +1168,11 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             eylemler.append(buton("Sil", lambda e: sil_onay(False), ft.Icons.DELETE, tip="text"))
             if i.get("fis_grup"):
                 eylemler.append(buton("Fişi tümden sil", lambda e: sil_onay(True), ft.Icons.DELETE_SWEEP, tip="text"))
+        if len(self.profiller) > 1 and i.get("id") not in (None, -1):
+            def yorum(e):
+                self.dialog_kapat(d)
+                self.yorum_yaz(i)
+            eylemler.insert(0, buton("Yorum yaz", yorum, ft.Icons.CHAT_BUBBLE_OUTLINE_ROUNDED, tip="text"))
         eylemler.append(buton("Kapat", lambda e: self.dialog_kapat(d), tip="text"))
         d.actions = eylemler
         self.dialog_ac(d)
@@ -1169,7 +1205,10 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         tutar_deger = onceki.get("tutar") or (f"{float(d['tutar']):.2f}".replace(".", ",") if d.get("tutar") else "")
         tutar = ft.TextField(value=tutar_deger, hint_text="0,00", keyboard_type=ft.KeyboardType.NUMBER,
                              autofocus=not d, text_size=34, text_align=ft.TextAlign.CENTER, border_color="transparent",
-                             suffix_text="₺", text_style=ft.TextStyle(weight=ft.FontWeight.BOLD, color=tur_renk))
+                             text_style=ft.TextStyle(weight=ft.FontWeight.BOLD, color=tur_renk),
+                             **({"suffix_text": "₺"} if _param_var(ft.TextField, "suffix_text") else
+                                {"suffix": ft.Text("₺", size=24, weight=ft.FontWeight.BOLD, color=tur_renk)}
+                                if _param_var(ft.TextField, "suffix") else {}))
         tarih = ft.TextField(label="Tarih (GG.AA.YYYY SS:DD)", prefix_icon=ft.Icons.EVENT_ROUNDED, dense=True,
                              value=onceki.get("tarih") or (hb.tarih_goster(d.get("tarih")) if d
                                                            else hb.simdi().strftime("%d.%m.%Y %H:%M")))

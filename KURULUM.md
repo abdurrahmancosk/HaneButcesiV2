@@ -125,3 +125,9 @@ Menü > Abonelikler > (Su aboneliğine dokunun ya da “Abonelik ekle”) → Ku
 - Borç varsa her dönem için su faturası eklenir (son ödeme tarihiyle) ve hatırlatılır; aynı borç iki kez eklenmez.
 - Borç yoksa uygulamada “ödenmedi” görünen su faturaları kapanır (ödemesi kayıtlarda bulunursa ona bağlanır; bulunamazsa ödenmiş sayılır, kasadan düşülmez).
 - Abonelik kartındaki 🔎 düğmesiyle istediğiniz an sorgulanır. Resmi bir servis değildir; ESKİ sayfası değişirse “Sorgulanamadı” yazar.
+
+## Sürüm 2.10
+- **PBY'den aidat & yakıt:** Faturalar sayfası ya da **+** menüsü > “Aidat & yakıt (PBY)”. PBY uygulamasında bu ayın borç ekranının ekran görüntüsünü seçin: yakıt → “Yakıt” faturası, aidat + elektrik → “Aidat” faturası, ikisinin de son ödeme tarihi yakıtınki. Aynı ay iki kez eklenmez.
+- **Günlük harcama sınırı:** Özet'te “Bugün harcayabileceğin”: kasadan bu dönemin ödenmemiş faturaları, taksitleri ve düzenli ödemeleri düşülür, kalan gün sayısına bölünür. %90'da ve aşılınca uyarır.
+- **Akıllı bütçe (Menü):** son 6 ayın fişlerinden hangi ürünü ne sıklıkla/ne kadara aldığınız, yakında bitecekler (tek dokunuşla listeye), bu dönemin gidişatı ve ortalamalar, ortalamaları bütçe limiti yapma, yapay zeka önerileri.
+- Düzeltmeler: elle eklemede `suffix_text` hatası; Flet 1.x'te değişen parametreler için genel uyumluluk katmanı; açılır listelerde seçim olayının çalışmaması (ESKİ aboneliğinin kaydedilememesi); pencere kapatılırken üstteki bildirimin pencere yerine kapanması; fiş detayında “Yorum yaz” hatası.

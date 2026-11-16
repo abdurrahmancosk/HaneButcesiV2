@@ -1193,6 +1193,8 @@ class EkOzellikler3:
             sec.append(kutu(ft.Icons.SWAP_HORIZ_ROUNDED, "Aktarım", "Kasalar arası para", AKTARIM, lambda: ekle("Aktarım")))
         sec.append(kutu(ft.Icons.RECEIPT_LONG_ROUNDED, "Fatura yükle", "Elektrik, su, doğalgaz…", "#d97706",
                         lambda: self.menu_ac("faturalar")))
+        sec.append(kutu(ft.Icons.APARTMENT_ROUNDED, "Aidat & yakıt (PBY)", "Bina yönetimi ekran görüntüsünden", "#8b5cf6",
+                        self.pby_yukle))
         sec.append(kutu(ft.Icons.CREDIT_CARD_ROUNDED, "Kart ekstresi", "PDF hesap özetinden taksitler", "#4f46e5",
                         lambda: (self.planla_ac("taksitler"), self.ekstre_yukle())))
         izgara = ft.ResponsiveRow(sec, spacing=10, run_spacing=10) if hasattr(ft, "ResponsiveRow") else ft.Row(sec, wrap=True)

@@ -19,7 +19,7 @@ from hb_ui import (ANA, AKTARIM, GELIR, GIDER, acilir, buton, cip, degrade, golg
                    simge_kutusu, yazi)
 
 FATURA_SIMGE = {"Elektrik": ("BOLT", "#f59e0b"), "Su": ("WATER_DROP", "#0ea5e9"), "Doğalgaz": ("LOCAL_FIRE_DEPARTMENT", "#f97316"),
-                "İnternet": ("WIFI", "#6366f1"), "Telefon": ("PHONE_ANDROID", "#14b8a6"), "Aidat": ("APARTMENT", "#8b5cf6"),
+                "İnternet": ("WIFI", "#6366f1"), "Telefon": ("PHONE_ANDROID", "#14b8a6"), "Aidat": ("APARTMENT", "#8b5cf6"), "Yakıt": ("LOCAL_FIRE_DEPARTMENT", "#ea580c"),
                 "Kira": ("HOME", "#0f766e"), "Kredi kartı": ("CREDIT_CARD", "#4f46e5"), "Sigorta": ("SHIELD", "#0891b2"),
                 "Diğer": ("RECEIPT_LONG", "#64748b")}
 
@@ -32,6 +32,7 @@ MENU = [  # anahtar, başlık, açıklama, simge, renk
     ("borclar", "Borç / alacak", "Kime ne verildi, kimden ne alınacak", "HANDSHAKE_ROUNDED", "#2563eb"),
     ("taksitler", "Taksitler", "Kredi kartı taksitleri, hatırlatma, ödedim", "CREDIT_CARD_ROUNDED", "#4f46e5"),
     ("abonelikler", "Abonelikler", "Su, doğalgaz, internet… e-postadan otomatik", "MARK_EMAIL_READ_ROUNDED", "#ea4335"),
+    ("aliskanlik", "Akıllı bütçe", "Ne sıklıkla ne alıyoruz, gidişat, öneriler", "INSIGHTS_ROUNDED", "#7c3aed"),
     ("sohbet", "Hane sohbeti", "Mesaj, para isteği, kayda yorum", "FORUM_ROUNDED", "#0d9488"),
     ("fiyatlar", "Fiyat takibi", "Ürün fiyatları, güncel market fiyatları", "PRICE_CHECK_ROUNDED", "#0891b2"),
     ("varliklar", "Altın & döviz", "Elinizdeki altın/döviz, güncel değeri", "DIAMOND_ROUNDED", "#ca8a04"),
@@ -480,6 +481,13 @@ class EkOzellikler:
             bgcolor=ui.KART, border_radius=16, padding=ft.Padding(12, 8, 6, 8), border=ui.kenar() if ui.KOYU else None,
             on_click=(lambda e: self.menu_ac("abonelikler")) if mail.get("sifre") else (lambda e: self.menu_ac("ayarlar"))))
 
+        ogeler.append(ft.Container(content=ft.Row([
+            ft.Icon(ft.Icons.APARTMENT_ROUNDED, color="#8b5cf6", size=20),
+            ft.Column([yazi("PBY'den aidat ve yakıt aktar", 13, "sb"),
+                       yazi("Bina yönetimi uygulamasının ekran görüntüsünden", 11, renk=ui.SOLUK)], spacing=0, expand=True),
+            ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.SOLUK)], spacing=10),
+            bgcolor=ui.KART, border_radius=16, padding=ft.Padding(12, 10, 10, 10), border=ui.kenar() if ui.KOYU else None,
+            on_click=lambda e: self.pby_yukle()))
         ak_kart = self.alisveris_faturalari_karti()
         if ak_kart:
             ogeler.append(ak_kart)
@@ -678,7 +686,7 @@ class EkOzellikler:
                 kategori.value = varsayilan_kat[tur.value]
             self.guncelle()
 
-        tur.on_change = tur_degisti
+        ui.degisince(tur, tur_degisti)
 
         def yeni_tur_ac(e):
             yeni_tur.visible = not yeni_tur.visible

@@ -5,6 +5,7 @@ Hane Bütçesi v2 – kredi kartı taksitleri, "gerçekten harcanabilir para", h
 import asyncio
 import calendar
 import datetime as dt
+import json
 import os
 import re
 
@@ -1106,6 +1107,7 @@ class EkOzellikler4:
         return sonuc
 
     def sayfa_abonelikler(self):
+        self._bagli_abonelikler()  # not alanında saklanan bağlantı bilgilerini çöz
         ogeler = [kart(yazi("Su, doğalgaz, elektrik, internet, telefon gibi aboneliklerinizi buradan izleyin. E-postadan gelen "
                             "faturalar abone numarasıyla eşleşir; beklenen günden 5 gün sonra fatura gelmemişse uyarılırsınız.",
                             12, renk=ui.SOLUK)),
@@ -1158,14 +1160,13 @@ class EkOzellikler4:
         if not ab.get("id") and not ab.get("baglanti") and (ab.get("tur") == "Su" or "eski" in (ab.get("kurum") or "").lower()):
             bag_ad = hb_kurum.KURUMLAR["eski"][0]
         baglanti = acilir("Kurumdan otomatik borç sorgusu", secenek, bag_ad)
-        musteri = ft.TextField(label="Müşteri no", value=ab.get("musteri_no") or "", dense=True,
-                               keyboard_type=ft.KeyboardType.NUMBER, visible=bag_ad != "Yok")
+        musteri = ft.TextField(label="Müşteri no (yalnız ESKİ otomatik sorgu için)", value=ab.get("musteri_no") or "",
+                               dense=True, keyboard_type=ft.KeyboardType.NUMBER)
         bag_bilgi = yazi("ESKİ'nin borç sorgulama sayfasından tesisat no (yukarıdaki abone no) + müşteri no ile günde iki kez "
                          "otomatik sorgulanır; borç çıkınca fatura eklenir, borç yoksa ödenmemiş görünen faturalar kapanır.",
-                         11, renk=ui.SOLUK, visible=bag_ad != "Yok")
+                         11, renk=ui.SOLUK)
 
         def bag_degisti(e):
-            musteri.visible = bag_bilgi.visible = baglanti.value != "Yok"
             if baglanti.value != "Yok":
                 tur.value = "Su"
                 if not (kurum.value or "").strip():
@@ -1173,11 +1174,15 @@ class EkOzellikler4:
                 no.label = "Tesisat no"
             self.guncelle()
 
-        baglanti.on_change = bag_degisti
+        ui.degisince(baglanti, bag_degisti)
 
         async def kaydet():
             g = int(hb.tutar_coz(gun.value) or 0) or None
             bag = next((k for k, v in hb_kurum.KURUMLAR.items() if v[0] == baglanti.value), None)
+            if not bag and (musteri.value or "").strip() and (tur.value == "Su" or "eski" in (kurum.value or "").lower()):
+                bag = "eski"  # müşteri no girildiyse ESKİ sorgusu istenmiştir
+            no.value = (no.value or "").strip().replace(" ", "")
+            musteri.value = (musteri.value or "").strip().replace(" ", "")
             if bag and (not (no.value or "").strip().isdigit() or not (musteri.value or "").strip().isdigit()):
                 self.bildir("Otomatik sorgu için tesisat no ve müşteri no (yalnız rakam) gerekli.", GIDER)
                 return False
@@ -1194,9 +1199,29 @@ class EkOzellikler4:
                     r = await self.arka(self.supa.tablo_ekle, "hb_abonelikler", kayit)
                     hedef = r[0] if r else dict(kayit)
             except hb.ApiHatasi as ex:
-                self.bildir("Kaydedilemedi: " + ("Supabase'de guncelleme_9.sql çalıştırılmamış" if "baglanti" in ex.mesaj
-                                                 or "musteri_no" in ex.mesaj else str(ex)), GIDER)
-                return False
+                eksik_sutun = any(x in ex.mesaj for x in ("baglanti", "musteri_no", "son_sorgu", "PGRST204", "column"))
+                if "hb_abonelikler" in ex.mesaj and ("does not exist" in ex.mesaj or "PGRST205" in ex.mesaj):
+                    self.bildir("Kaydedilemedi: Supabase'de guncelleme_8.sql ve guncelleme_9.sql çalıştırılmamış.", GIDER)
+                    return False
+                if not eksik_sutun:
+                    self.bildir(f"Kaydedilemedi: {ex}", GIDER)
+                    return False
+                # guncelleme_9.sql çalıştırılmamış: bağlantı bilgisini not alanında sakla
+                kayit.pop("baglanti", None)
+                kayit.pop("musteri_no", None)
+                if bag:
+                    kayit["not_"] = f"baglanti:{bag};musteri:{(musteri.value or '').strip()}"
+                try:
+                    if ab.get("id"):
+                        await self.arka(self.supa.tablo_guncelle, "hb_abonelikler", ab["id"], kayit)
+                        hedef = dict(ab, **kayit)
+                    else:
+                        r = await self.arka(self.supa.tablo_ekle, "hb_abonelikler", kayit)
+                        hedef = r[0] if r else dict(kayit)
+                except Exception as ex2:
+                    self.bildir(f"Kaydedilemedi: {ex2}", GIDER)
+                    return False
+                hedef.update(baglanti=bag, musteri_no=(musteri.value or "").strip() or None)
             self.bildir("Kaydedildi ✓", GELIR)
             await self.ek_verileri_yenile()
             self.ekrani_ciz()
@@ -1463,8 +1488,14 @@ class EkOzellikler4:
 
     # ================================================================== kurum sayfasından borç sorgusu (ESKİ)
     def _bagli_abonelikler(self):
-        return [ab for ab in self.ek.get("abonelikler", []) if ab.get("baglanti") and ab.get("aktif", True)
-                and (self.yonetici or ab.get("kasa_sahibi") == self.ben["id"])]
+        sonuc = []
+        for ab in self.ek.get("abonelikler", []):
+            if not ab.get("baglanti") and str(ab.get("not_") or "").startswith("baglanti:"):
+                parcalar = dict(p.split(":", 1) for p in ab["not_"].split(";") if ":" in p)
+                ab["baglanti"], ab["musteri_no"] = parcalar.get("baglanti"), parcalar.get("musteri")
+            if ab.get("baglanti") and ab.get("aktif", True) and (self.yonetici or ab.get("kasa_sahibi") == self.ben["id"]):
+                sonuc.append(ab)
+        return sonuc
 
     async def kurum_sorgula(self, ab, sessiz=True):
         import hb_kurum
@@ -1545,3 +1576,301 @@ class EkOzellikler4:
             await self.kurum_sorgula(ab, sessiz)
         if self.sekme == 4 and self.alt_sayfa in ("abonelikler", "faturalar"):
             self.ekrani_ciz()
+
+    # ================================================================== PBY (bina yönetimi) ekranından aidat & yakıt
+    def pby_yukle(self):
+        async def foto(e):
+            self.dialog_kapat(d)
+            veri = await self.dosya_sec("resim")
+            if veri:
+                await self.pby_isle(veri)
+
+        d = ft.AlertDialog(title=yazi("PBY'den aidat ve yakıt aktar", 17, True), content=ft.Column([
+            yazi("Android, bir uygulamanın başka bir uygulamanın içini okumasına izin vermiyor. Bu yüzden şöyle yapıyoruz:", 12.5),
+            yazi("1) PBY uygulamasını açın, bu ayın borç / tahakkuk ekranına gelin.\n"
+                 "2) Ekran görüntüsü alın (gerekirse kaydırıp ikinci bir görüntü daha).\n"
+                 "3) Aşağıdan ekran görüntüsünü seçin.", 12, renk=ui.SOLUK),
+            yazi("Yakıt tutarı “Yakıt” faturası, aidat + elektrik toplamı “Aidat” faturası olarak eklenir; ikisinin de son ödeme "
+                 "tarihi yakıtın son ödeme tarihidir. Aynı ay iki kez eklenmez.", 11.5, renk=ui.SOLUK),
+            buton("Ekran görüntüsünü seç", foto, ft.Icons.PHOTO_LIBRARY_ROUNDED)], tight=True, spacing=10),
+            actions=[buton("Vazgeç", lambda e: self.dialog_kapat(d), tip="text")])
+        self.dialog_ac(d)
+
+    async def pby_isle(self, veri: bytes):
+        if not self.gemini_anahtari:
+            self.bildir("Okumak için Menü > Ayarlar'da Gemini anahtarı gerekli.", GIDER)
+            return
+        self.bildir("🏢 PBY ekranı okunuyor…")
+        try:
+            hazir, mime = await self.arka(hb.gorseli_hazirla, veri)
+            sonuc = await self.arka(ak.pby_analiz_et, hazir, mime, self.gemini_anahtari)
+        except Exception as ex:
+            self.bildir(f"Okunamadı: {ex}", GIDER)
+            return
+        if not sonuc["kalemler"]:
+            self.bildir("Ekranda tutar bulunamadı. Bu ayın borç listesinin göründüğü ekranı seçin.", GIDER)
+            return
+        self.pby_onay(sonuc)
+
+    def pby_onay(self, sonuc):
+        diger_cb = {}
+        satirlar = []
+        for k in sonuc["kalemler"]:
+            etiket = {"yakit": "→ Yakıt", "aidat": "→ Aidat", "elektrik": "→ Aidat"}.get(k["cesit"])
+            if k.get("odendi"):
+                etiket = "ödenmiş, eklenmez"
+            if k["cesit"] == "diger" and not k.get("odendi"):
+                cb = ft.Checkbox(label="Aidata ekle", value=False)
+                diger_cb[k["ad"]] = cb
+            satirlar.append(ft.Row([
+                ft.Column([yazi(k["ad"], 13, "sb"), yazi((f"son ödeme {hb.tarih_kesin(k['son_odeme']).strftime('%d.%m.%Y')}"
+                                                         if k.get("son_odeme") else "son ödeme yok"), 11, renk=ui.SOLUK)],
+                          spacing=0, expand=True),
+                yazi(hb.tl(k["tutar"]), 13.5, "xb"),
+                yazi(etiket, 11, "sb", renk=ui.VURGU) if etiket else diger_cb[k["ad"]]], spacing=8))
+        donem = ft.TextField(label="Dönem", value=sonuc.get("donem") or ui.AYLAR_UZUN[hb.simdi().month - 1] + f" {hb.simdi().year}",
+                             dense=True)
+        kasa = self._kasa_secici()
+        onizleme = ft.Column(spacing=4)
+
+        def hesapla(e=None):
+            dahil = {ad for ad, cb in diger_cb.items() if cb.value}
+            fs = ak.pby_faturalara_cevir(sonuc, dahil)
+            onizleme.controls = [ft.Row([yazi(f["tur"] + " faturası", 13.5, True, expand=True),
+                                         yazi(("son ödeme " + hb.tarih_kesin(f["son_odeme"]).strftime("%d.%m.%Y"))
+                                              if f.get("son_odeme") else "son ödeme yok", 11, renk=ui.SOLUK),
+                                         yazi(hb.tl(f["tutar"]), 14, "xb")], spacing=8) for f in fs]
+            self.guncelle()
+            return fs
+
+        for cb in diger_cb.values():
+            ui.degisince(cb, hesapla)
+        hesapla()
+
+        async def kaydet():
+            fs = hesapla()
+            if not fs:
+                self.bildir("Eklenecek ödenmemiş kalem yok.", GIDER)
+                return False
+            eklenen = 0
+            for f in fs:
+                kayit = {"tur": f["tur"], "kurum": "PBY Bina Yönetimi", "donem": (donem.value or "").strip() or None,
+                         "son_odeme": f.get("son_odeme"), "tutar": f["tutar"],
+                         "kasa_sahibi": kasa.value if self.yonetici else self.ben["id"],
+                         "mail_id": f"pby:{hb.urun_anahtari(donem.value or '')}:{f['tur']}",
+                         "kategori": "Kira & Aidat & Faturalar", "analiz": f"PBY'den aktarıldı: {f['aciklama']}"}
+                onceki = next((x for x in self.ek.get("faturalar", []) if x.get("tur") == f["tur"]), None)
+                try:
+                    kayit["analiz"] += "\n" + ak.fatura_karsilastir(kayit, onceki)
+                except Exception:
+                    pass
+                try:
+                    if await self.arka(self.supa.fatura_mailden_ekle, kayit):
+                        eklenen += 1
+                except Exception as ex:
+                    self.bildir(f"Kaydedilemedi: {ex}", GIDER)
+                    return False
+            self.bildir(f"✓ {eklenen} fatura eklendi" if eklenen else "Bu dönem zaten eklenmiş (tekrar eklenmedi)",
+                        GELIR if eklenen else None)
+            await self.ek_verileri_yenile()
+            self.ekrani_ciz()
+
+        self._girdi_dialog("PBY'den okunanlar", [*satirlar, ft.Divider(), yazi("Eklenecek faturalar", 13, "sb"), onizleme, donem]
+                           + ([yazi("Hangi kasadan ödenir?", 12, renk=ui.SOLUK), kasa] if self.yonetici else []), kaydet,
+                           "Faturaları ekle")
+
+    # ================================================================== günlük harcama limiti
+    _FATURA_KATEGORI = ("Kira & Aidat & Faturalar", "Kredi Kartı, Kredi Ödemesi & Borç")
+
+    def _fatura_odemesi_mi(self, i):
+        return (i.get("kategori") in self._FATURA_KATEGORI or (i.get("aciklama") or "") in ("Fatura ödemesi",
+                                                                                              "Kredi kartı taksidi"))
+
+    def gunluk_limit(self, pid=None):
+        """Faturalar/taksitler/düzenli ödemeler düşüldükten sonra dönem sonuna kadar günlük harcanabilir tutar.
+        -> {"limit", "harcanan", "oran", "kalan_gun", "serbest"} ya da None"""
+        if self.donem_ofset != 0:
+            return None
+        try:
+            serbest, kasa, _ = self.harcanabilir(pid)
+        except Exception:
+            return None
+        bas, bit = self.donem
+        bugun = hb.simdi().date()
+        kalan_gun = (bit - bugun).days + 1
+        if kalan_gun <= 0:
+            return None
+        harcanan = sum(float(i.get("tutar") or 0) for i in self.islemler
+                       if i.get("tur") == "Gider" and hb.tarih_yerel(i.get("tarih")).date() == bugun
+                       and (pid is None or i.get("kasa_sahibi") == pid) and not self._fatura_odemesi_mi(i))
+        limit = max(0.0, (serbest + harcanan) / kalan_gun)
+        return {"limit": limit, "harcanan": harcanan, "oran": (harcanan / limit) if limit else (1.0 if harcanan else 0.0),
+                "kalan_gun": kalan_gun, "serbest": serbest}
+
+    def gunluk_limit_karti(self):
+        pid = None if self.yonetici else self.ben["id"]
+        g = self.gunluk_limit(pid)
+        if not g:
+            return None
+        oran = g["oran"]
+        renk = GIDER if oran >= 1 else ("#d97706" if oran >= 0.9 else ui.VURGU)
+        from hb_ek import _ilerleme
+        kalan = g["limit"] - g["harcanan"]
+        return kart(ft.Column([
+            ft.Row([simge_kutusu(ft.Icons.TODAY_ROUNDED, renk, 18, 36),
+                    ft.Column([yazi("Bugün harcayabileceğin", 12, renk=ui.SOLUK),
+                               yazi(hb.tl(g["limit"]), 20, "xb")], spacing=0, expand=True),
+                    ft.Column([yazi("Kalan" if kalan >= 0 else "Aşım", 11.5, renk=ui.SOLUK),
+                               yazi(hb.tl(abs(kalan)), 14.5, "xb", renk=renk)], spacing=0,
+                              horizontal_alignment=ft.CrossAxisAlignment.END)], spacing=10),
+            _ilerleme(min(oran, 1.0), renk, 8),
+            yazi(f"Bugün {hb.tl(g['harcanan'])} harcandı (%{oran * 100:.0f}) • faturalar ve taksitler düşülünce kalan "
+                 f"{hb.tl(g['serbest'])}, dönem sonuna {g['kalan_gun']} gün", 11, renk=ui.SOLUK)], spacing=8),
+            shadow=golge(0.5))
+
+    def gunluk_limit_uyar(self):
+        """%90'a ulaşınca ve aşılınca günde bir kez uyarır."""
+        pid = None if self.yonetici else self.ben["id"]
+        g = self.gunluk_limit(pid)
+        if not g or not g["harcanan"]:
+            return
+        seviye = 2 if g["oran"] >= 1 else (1 if g["oran"] >= 0.9 else 0)
+        if not seviye:
+            return
+        bugun = hb.simdi().date().isoformat()
+        kayit = self._yerel_ayar().get("gunluk_uyari") or {}
+        if kayit.get("tarih") == bugun and int(kayit.get("seviye") or 0) >= seviye:
+            return
+        self._yerel_ayar_yaz(gunluk_uyari={"tarih": bugun, "seviye": seviye})
+        if seviye == 2:
+            self.bildir(f"🚨 Günlük harcama sınırı aşıldı: {hb.tl(g['harcanan'])} / {hb.tl(g['limit'])}", GIDER)
+        else:
+            self.bildir(f"⚠️ Günlük harcama sınırının %{g['oran'] * 100:.0f}'ine ulaştınız ({hb.tl(g['limit'])})", "#d97706")
+
+    # ================================================================== alışkanlıklar ve planlı bütçe
+    def sayfa_aliskanlik(self):
+        kutu = ft.Column(spacing=12)
+        durum = {"veri": None, "ai": None}
+
+        def ciz():
+            v = durum["veri"]
+            if v is None:
+                kutu.controls = [ft.Row([ft.ProgressRing(width=20, height=20),
+                                         yazi("Son 6 ayın alışverişleri inceleniyor…", 12, renk=ui.SOLUK)])]
+                return
+            islemler = [i for i in v if self.yonetici or i.get("kasa_sahibi") == self.ben["id"]]
+            urunler = ak.aliskanliklar(islemler)
+            bas, bit = self.donem
+            gecmis = [hb.butce_donemi(hb.simdi().date(), -n) for n in (1, 2, 3)]
+            ort = ak.kategori_ortalamalari(islemler, gecmis)
+            bu = {}
+            for i in islemler:
+                if i.get("tur") == "Gider" and bas <= hb.tarih_yerel(i["tarih"]).date() <= bit:
+                    k = i.get("kategori") or "Diğer"
+                    bu[k] = bu.get(k, 0.0) + float(i.get("tutar") or 0)
+            gecen = max(1, (hb.simdi().date() - bas).days + 1)
+            toplam_gun = (bit - bas).days + 1
+            ogeler = []
+            # 1) yakında bitecekler
+            yakin = [u for u in urunler if u["yakinda"]][:8]
+            if yakin:
+                ogeler.append(kart(ft.Column([
+                    ft.Row([ft.Icon(ft.Icons.SHOPPING_CART_CHECKOUT_ROUNDED, color=GELIR), yazi("Yakında alınması gerekenler", 15, True)]),
+                    yazi("Alışkanlığınıza göre bitmek üzere olan ürünler:", 11.5, renk=ui.SOLUK),
+                    *[ft.Row([ft.Column([yazi(u["ad"], 13, "sb"),
+                                         yazi(f"ortalama {u['ort_aralik']:.0f} günde bir • son alım {u['gecen_gun']} gün önce • "
+                                              f"~{hb.tl(u['ort_tutar'])}", 11, renk=ui.SOLUK)], spacing=0, expand=True),
+                              ft.IconButton(icon=ft.Icons.ADD_SHOPPING_CART_ROUNDED, tooltip="Listeye ekle",
+                                            on_click=lambda e, u=u: self.page.run_task(self.listeye_ekle, u["ad"]))])
+                      for u in yakin],
+                    buton("Hepsini listeye ekle", lambda e: self.page.run_task(self._hepsini_listeye, [u["ad"] for u in yakin]),
+                          ft.Icons.PLAYLIST_ADD_ROUNDED, tip="tonal")], spacing=8), shadow=golge(0.5)))
+            # 2) kategori: bu dönem gidişatı vs ortalama
+            satir = []
+            for k, o in list(ort.items())[:8]:
+                b = bu.get(k, 0.0)
+                tahmin = b / gecen * toplam_gun
+                fark = (tahmin - o) / o if o else 0
+                renk = GIDER if fark > 0.15 else (GELIR if fark < -0.1 else ui.SOLUK)
+                satir.append(ft.Row([yazi(k, 12.5, "sb", expand=True, max_lines=1),
+                                     yazi(f"ort. {hb.tl(o)}", 11, renk=ui.SOLUK),
+                                     yazi(f"bu dönem ~{hb.tl(tahmin)}", 11.5, "sb", renk=renk)], spacing=8))
+            if satir:
+                async def limit_kaydet(e):
+                    for k, o in list(ort.items())[:8]:
+                        try:
+                            await self.arka(self.supa.butce_yaz, k, round(o / 50) * 50 or o)
+                        except Exception:
+                            pass
+                    self.bildir("✓ Önerilen limitler bütçe olarak kaydedildi", GELIR)
+                    await self.ek_verileri_yenile()
+
+                ogeler.append(kart(ft.Column([
+                    ft.Row([ft.Icon(ft.Icons.INSIGHTS_ROUNDED, color=ui.VURGU), yazi("Bu dönemin gidişatı", 15, True)]),
+                    yazi("Son 3 dönemin ortalamasıyla, bu hızla gidilirse dönem sonunda varılacak tutar:", 11.5, renk=ui.SOLUK),
+                    *satir,
+                    *([buton("Ortalamaları bütçe limiti yap", limit_kaydet, ft.Icons.DONUT_LARGE_ROUNDED, tip="text")]
+                      if self.yonetici else [])], spacing=8), shadow=golge(0.5)))
+            # 3) en çok para giden düzenli ürünler + fiyat değişimi
+            if urunler:
+                ogeler.append(kart(ft.Column([
+                    ft.Row([ft.Icon(ft.Icons.REPEAT_ROUNDED, color="#7c3aed"), yazi("Düzenli aldıklarınız", 15, True)]),
+                    yazi("Aylık ortalama harcamaya göre sıralı", 11.5, renk=ui.SOLUK),
+                    *[ft.Row([ft.Column([yazi(u["ad"], 12.5, "sb", max_lines=1),
+                                         yazi(f"{u['adet']} kez • {u['ort_aralik']:.0f} günde bir"
+                                              + (f" • fiyat %{(u['son_fiyat'] / u['ilk_fiyat'] - 1) * 100:+.0f}"
+                                                 if u["ilk_fiyat"] and abs(u["son_fiyat"] / u["ilk_fiyat"] - 1) >= 0.05 else ""),
+                                              11, renk=ui.SOLUK)], spacing=0, expand=True),
+                              yazi(f"{hb.tl(u['aylik'])}/ay", 12.5, "xb")]) for u in urunler[:15]]], spacing=6),
+                    shadow=golge(0.5)))
+            # 4) yapay zeka önerisi
+            async def ai(e):
+                durum["ai"] = "…"
+                ciz()
+                self.guncelle()
+                ozet = {"kategori_ortalama": dict(list(ort.items())[:10]),
+                        "bu_donem_tahmin": {k: round(bu.get(k, 0) / gecen * toplam_gun) for k in list(ort)[:10]},
+                        "duzenli_urunler": [{k: u[k] for k in ("ad", "ort_aralik", "ort_tutar", "aylik")} for u in urunler[:20]]}
+                g = self.gunluk_limit(None if self.yonetici else self.ben["id"])
+                if g:
+                    ozet["gunluk_limit"] = round(g["limit"])
+                istem = ("Bir ailenin harcama alışkanlıkları özeti (TL) aşağıda. Türkçe, samimi ve somut 5 madde halinde planlı bütçe "
+                         "önerisi ver: hangi üründe/kategoride tasarruf, toplu alım, alım sıklığı, günlük limit. Her madde tek cümle, "
+                         "rakam içersin. JSON değil düz metin.\n" + json.dumps(ozet, ensure_ascii=False))
+                try:
+                    durum["ai"] = await self.arka(ak.gemini, istem, self.gemini_anahtari, None, "image/jpeg", False, 0.4)
+                except Exception as ex:
+                    durum["ai"] = f"Öneri alınamadı: {ex}"
+                ciz()
+                self.guncelle()
+
+            ogeler.append(kart(ft.Column([
+                ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME_ROUNDED, color=ui.ALTIN), yazi("Yapay zeka önerileri", 15, True, expand=True),
+                        buton("Öneri al", ai, tip="text") if self.gemini_anahtari else ft.Container()]),
+                yazi(durum["ai"] if isinstance(durum["ai"], str) else
+                     "Harcama alışkanlıklarınıza göre kişisel tasarruf önerileri için “Öneri al”a dokunun.", 12.5,
+                     renk=ui.YAZI if durum["ai"] else ui.SOLUK, selectable=True)], spacing=8), shadow=golge(0.5)))
+            if not urunler and not ort:
+                ogeler.insert(0, kart(yazi("Analiz için yeterli geçmiş yok. Fişler ekledikçe burası dolacak.", 12.5, renk=ui.SOLUK)))
+            kutu.controls = ogeler
+
+        async def yukle():
+            bas = hb.simdi().date() - dt.timedelta(days=185)
+            try:
+                durum["veri"] = await self.arka(self.supa.islemler, bas, hb.simdi().date())
+            except Exception:
+                durum["veri"] = list(self.islemler)
+            ciz()
+            self.guncelle()
+
+        self.page.run_task(yukle)
+        ciz()
+        return self._liste([kutu])
+
+    async def _hepsini_listeye(self, adlar):
+        try:
+            await self.arka(self.supa.tablo_ekle, "hb_alisveris", [{"urun": a[:80]} for a in adlar])
+            self.bildir(f"✓ {len(adlar)} ürün alışveriş listesine eklendi", GELIR)
+            await self.ek_verileri_yenile()
+        except Exception as ex:
+            self.bildir(f"Eklenemedi: {ex}", GIDER)

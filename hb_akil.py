@@ -79,7 +79,7 @@ def gemini(prompt: str, api_anahtari: str, gorsel: bytes | None = None, mime: st
 # ----------------------------------------------------------------------------
 # Faturalar
 # ----------------------------------------------------------------------------
-FATURA_TURLERI = ["Elektrik", "Su", "Doğalgaz", "İnternet", "Telefon", "Aidat", "Kira", "Kredi kartı", "Sigorta", "Diğer"]
+FATURA_TURLERI = ["Elektrik", "Su", "Doğalgaz", "İnternet", "Telefon", "Aidat", "Yakıt", "Kira", "Kredi kartı", "Sigorta", "Diğer"]
 _AY = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
 
 
@@ -1127,7 +1127,7 @@ def mail_faturalari_getir(adres: str, sifre: str, gun: int = 45, gorulen: set | 
     return sonuc
 
 
-ABONELIK_TURLERI = {"Elektrik", "Su", "Doğalgaz", "İnternet", "Telefon", "Aidat", "Kira", "Sigorta"}
+ABONELIK_TURLERI = {"Elektrik", "Su", "Doğalgaz", "İnternet", "Telefon", "Aidat", "Yakıt", "Kira", "Sigorta"}
 
 
 def mail_fatura_coz(mail: dict, api_anahtari: str, turler: list[str] | None = None) -> dict:
@@ -1188,3 +1188,108 @@ Sınıflandırma kuralları (çok önemli):
         if not (tur in ABONELIK_TURLERI or ozel) or not (bilgi["abone_no"] or bilgi["son_odeme"]):
             cesit = "alisveris"
     return {"cesit": cesit, **bilgi}
+
+
+
+# ----------------------------------------------------------------------------
+# PBY (Profesyonel Bina Yönetimi) ekran görüntüsünden aylık bina giderleri
+# ----------------------------------------------------------------------------
+def pby_analiz_et(gorsel: bytes, mime: str, api_anahtari: str) -> dict:
+    """PBY uygulamasının borç/tahakkuk ekranından kalemleri okur.
+    -> {"donem": "Kasım 2026", "kalemler": [{"ad", "tutar", "son_odeme", "cesit": yakit|aidat|elektrik|diger, "odendi"}]}"""
+    istem = """Bu, bir apartman/site yönetim uygulamasının (PBY – Profesyonel Bina Yönetimi) ekran görüntüsü. Bu ayın
+tahakkuk / borç kalemlerini oku. YALNIZCA şu JSON'u döndür:
+{"donem": "Kasım 2026", "kalemler": [{"ad": "ekrandaki kalem adı", "tutar": 0.0, "son_odeme": "GG.AA.YYYY",
+"cesit": "yakit | aidat | elektrik | diger", "odendi": false}]}
+Kurallar:
+- cesit: yakıt / ısınma / doğalgaz / kalorifer / mazot payı → "yakit"; aidat / yönetim gideri → "aidat";
+  elektrik / ortak alan elektriği → "elektrik"; diğer her şey (su, demirbaş, asansör, temizlik…) → "diger".
+- Ödenmiş görünen kalemler için odendi=true. Tutarları sayı yaz (1.234,56 → 1234.56).
+- Ekranda açıkça görünmeyen tarih ya da tutarı null bırak; UYDURMA."""
+    j = gemini(istem, api_anahtari, gorsel=gorsel, mime=mime, sicaklik=0.1)
+    if not isinstance(j, dict):
+        raise hb.ApiHatasi(500, "PBY ekranı okunamadı")
+    kalemler = []
+    for k in j.get("kalemler") or []:
+        if not isinstance(k, dict):
+            continue
+        t = hb.tutar_coz(k.get("tutar"))
+        if not t or t <= 0:
+            continue
+        cesit = str(k.get("cesit") or "diger").lower()
+        if cesit not in ("yakit", "aidat", "elektrik", "diger"):
+            cesit = "diger"
+        kalemler.append({"ad": str(k.get("ad") or cesit).strip()[:60], "tutar": round(abs(t), 2),
+                         "son_odeme": _tarih_al(k.get("son_odeme")), "cesit": cesit, "odendi": bool(k.get("odendi"))})
+    return {"donem": (j.get("donem") or "").strip() or None, "kalemler": kalemler}
+
+
+def pby_faturalara_cevir(sonuc: dict, aidata_dahil: set[str] | None = None) -> list[dict]:
+    """Kural: yakıt → 'Yakıt' faturası; aidat + elektrik (+ seçilen diğerleri) toplamı → 'Aidat' faturası.
+    Son ödeme: hepsinde yakıtın son ödeme tarihi (yoksa kalemlerdeki ilk tarih)."""
+    aidata_dahil = aidata_dahil if aidata_dahil is not None else set()
+    kalemler = [k for k in sonuc["kalemler"] if not k.get("odendi")]
+    yakit = [k for k in kalemler if k["cesit"] == "yakit"]
+    aidat = [k for k in kalemler if k["cesit"] in ("aidat", "elektrik") or k["ad"] in aidata_dahil]
+    son = next((k["son_odeme"] for k in yakit if k.get("son_odeme")), None) or \
+        next((k["son_odeme"] for k in kalemler if k.get("son_odeme")), None)
+    faturalar = []
+    if yakit:
+        faturalar.append({"tur": "Yakıt", "tutar": round(sum(k["tutar"] for k in yakit), 2), "son_odeme": son,
+                          "aciklama": " + ".join(k["ad"] for k in yakit)})
+    if aidat:
+        faturalar.append({"tur": "Aidat", "tutar": round(sum(k["tutar"] for k in aidat), 2), "son_odeme": son,
+                          "aciklama": " + ".join(f"{k['ad']} {hb.tl(k['tutar'])}" for k in aidat)})
+    return faturalar
+
+
+# ----------------------------------------------------------------------------
+# Alışkanlık analizi: hangi ürün ne sıklıkla, ne kadar alınıyor
+# ----------------------------------------------------------------------------
+def aliskanliklar(islemler: list[dict], bugun: dt.date | None = None, en_az: int = 3) -> list[dict]:
+    bugun = bugun or hb.simdi().date()
+    gruplar: dict[str, list] = {}
+    for i in islemler:
+        if i.get("tur") != "Gider" or not i.get("urun"):
+            continue
+        anahtar = hb.urun_anahtari(i["urun"])
+        if len(anahtar) < 3:
+            continue
+        gruplar.setdefault(anahtar, []).append(i)
+    sonuc = []
+    for anahtar, ks in gruplar.items():
+        ks = sorted(ks, key=lambda k: str(k.get("tarih") or ""))
+        gunler = sorted({hb.tarih_yerel(k["tarih"]).date() for k in ks})
+        if len(gunler) < en_az:
+            continue
+        araliklar = [(b - a).days for a, b in zip(gunler, gunler[1:]) if (b - a).days > 0]
+        if not araliklar:
+            continue
+        ort_aralik = sum(araliklar) / len(araliklar)
+        toplam = sum(float(k.get("tutar") or 0) for k in ks)
+        ilk, son = gunler[0], gunler[-1]
+        ay = max(1.0, ((bugun - ilk).days or 1) / 30.4)
+        gecen = (bugun - son).days
+        ad = max((k["urun"] for k in ks), key=lambda u: sum(1 for k in ks if k["urun"] == u))
+        sonuc.append({"anahtar": anahtar, "ad": ad, "adet": len(gunler), "ort_aralik": round(ort_aralik, 1),
+                      "ort_tutar": round(toplam / len(ks), 2), "aylik": round(toplam / ay, 2), "son": son.isoformat(),
+                      "gecen_gun": gecen, "sonraki": (son + dt.timedelta(days=round(ort_aralik))).isoformat(),
+                      "yakinda": gecen >= ort_aralik * 0.85 and gecen <= ort_aralik * 3,
+                      "kategori": ks[-1].get("kategori"), "son_fiyat": float(ks[-1].get("birim_fiyat") or ks[-1].get("tutar") or 0),
+                      "ilk_fiyat": float(ks[0].get("birim_fiyat") or ks[0].get("tutar") or 0)})
+    return sorted(sonuc, key=lambda x: -x["aylik"])
+
+
+def kategori_ortalamalari(islemler: list[dict], donemler: list[tuple[dt.date, dt.date]]) -> dict[str, float]:
+    """Verilen tamamlanmış dönemlerde kategori başına ortalama harcama."""
+    toplam: dict[str, float] = {}
+    for bas, bit in donemler:
+        for i in islemler:
+            if i.get("tur") != "Gider":
+                continue
+            g = hb.tarih_yerel(i["tarih"]).date()
+            if bas <= g <= bit:
+                k = i.get("kategori") or "Diğer"
+                toplam[k] = toplam.get(k, 0.0) + float(i.get("tutar") or 0)
+    n = max(1, len(donemler))
+    return {k: round(v / n, 2) for k, v in sorted(toplam.items(), key=lambda kv: -kv[1])}

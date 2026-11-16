@@ -43,10 +43,66 @@ tema_uygula(False)
 # Flet sürüm uyumluluğu (0.2x ve 1.x)
 # ---------------------------------------------------------------------------
 def _param_var(cls, ad):
+    cls = getattr(cls, "__wrapped__", cls)
     try:
         return ad in inspect.signature(cls.__init__).parameters
     except Exception:
         return False
+
+
+# Flet 1.x'te adı değişen / kaldırılan parametreler: eski ad -> yeni ad (None: yeni karşılığı yok, atla)
+_YENI_ADLAR = {"suffix_text": "suffix", "prefix_text": "prefix", "helper_text": "helper", "error_text": "error",
+               "counter_text": "counter", "text": "content", "on_change": "on_select"}
+_UYUM_SINIFLARI = ["TextField", "Dropdown", "Container", "Text", "Row", "Column", "ListView", "IconButton", "Icon",
+                   "Image", "Checkbox", "Switch", "AlertDialog", "BottomSheet", "ProgressBar", "ProgressRing",
+                   "ResponsiveRow", "Stack", "FilledButton", "OutlinedButton", "TextButton", "ElevatedButton",
+                   "FilledTonalButton", "FloatingActionButton", "SnackBar", "TextSpan", "TextStyle", "Divider",
+                   "SafeArea", "RadioGroup", "Radio", "NavigationBar", "Tooltip"]
+
+
+def _uyumlu(cls):
+    """Bilinmeyen parametreyi yeni adına çevirir ya da atlar; uygulama 'unexpected keyword' hatasıyla çökmez."""
+    try:
+        parametreler = inspect.signature(cls.__init__).parameters
+    except Exception:
+        return cls
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parametreler.values()):
+        return cls
+    adlar = set(parametreler)
+
+    def yap(*args, **kw):
+        for k in [k for k in kw if k not in adlar]:
+            v = kw.pop(k)
+            yeni = _YENI_ADLAR.get(k)
+            if yeni and yeni in adlar and yeni not in kw:
+                if yeni in ("suffix", "prefix", "helper", "error", "counter") and isinstance(v, str):
+                    v = _ASIL_TEXT(v)  # 1.x: metin yerine kontrol beklenebilir
+                kw[yeni] = v
+            else:
+                print(f"[uyum] {cls.__name__}: '{k}' parametresi bu Flet sürümünde yok, atlandı")
+        return cls(*args, **kw)
+
+    yap.__wrapped__ = cls
+    yap.__name__ = cls.__name__
+    yap.__doc__ = cls.__doc__
+    return yap
+
+
+_ASIL_TEXT = ft.Text
+for _ad in _UYUM_SINIFLARI:
+    _cls = getattr(ft, _ad, None)
+    if isinstance(_cls, type):
+        setattr(ft, _ad, _uyumlu(_cls))
+
+
+def degisince(kontrol, islev):
+    """Değişim olayını Flet sürümünden bağımsız bağlar (Dropdown: 0.2x on_change, 1.x on_select)."""
+    for olay in ("on_change", "on_select"):
+        try:
+            setattr(kontrol, olay, islev)
+        except Exception:
+            pass
+    return kontrol
 
 
 def buton(metin, on_click=None, ikon=None, tip="filled", **kw):
@@ -61,7 +117,11 @@ _SECENEK = getattr(ft, "DropdownOption", None) or ft.dropdown.Option
 
 
 def acilir(etiket, secenekler, deger=None, **kw):
-    return ft.Dropdown(label=etiket, value=deger, options=[_SECENEK(key=s, text=s) for s in secenekler], **kw)
+    olay = kw.pop("on_change", None)
+    d = ft.Dropdown(label=etiket, value=deger, options=[_SECENEK(key=s, text=s) for s in secenekler], **kw)
+    if olay:
+        degisince(d, olay)
+    return d
 
 
 def kenar(renk=None, kalinlik=1):
