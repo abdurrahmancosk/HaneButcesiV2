@@ -2369,7 +2369,11 @@ class EkOzellikler4:
             def nobet(n):
                 a2 = self.ek_ders_ayari()
                 nb = dict(a2.get("nobetler") or {})
-                nb[f"{y}-{m:02d}"] = max(0, int(nb.get(f"{y}-{m:02d}", 0) or 0) + n)
+                yeni = int(nb.get(f"{y}-{m:02d}", 0) or 0) + n
+                if yeni > ak.EK_DERS_PANSIYON_EN_FAZLA:
+                    self.bildir(f"Bir ayda en fazla {ak.EK_DERS_PANSIYON_EN_FAZLA} pansiyon nöbeti tutulabilir", GIDER)
+                    return
+                nb[f"{y}-{m:02d}"] = max(0, yeni)
                 a2["nobetler"] = nb
                 self._ek_ders_kaydet(a2)
                 ciz()
@@ -2380,13 +2384,28 @@ class EkOzellikler4:
                 ciz()
                 self.guncelle()
 
-            detay = (f"{r['okul_gunu']} okul günü × haftalık {sa(r['haftalik'])} saat = {sa(r['saat_ders'])} sa"
+            detay = (f"{r['okul_gunu']} okul günü (haftada {sa(r['haftalik'])} saat) = {sa(r['saat_ders'])} sa"
                      + (f" • ara tatil {r['ara_tatil_gunu']} gün = {sa(r['saat_ara'])} sa" if r["ara_tatil_gunu"] else "")
-                     + (f" • pansiyon {r['pansiyon']} × {sa(a['pansiyon_saat'])} = {sa(r['saat_pansiyon'])} sa" if r["pansiyon"] else ""))
+                     + (f" • pansiyon {r['pansiyon']} × {sa(a['pansiyon_saat'])} = {sa(r['saat_pansiyon'])} sa" if r["pansiyon"] else "")
+                     + (f" • diğer {sa(r['saat_diger'])} sa" if r["saat_diger"] else ""))
+            aralik = (f"{r['bas'].day} {ui.AYLAR_UZUN[r['bas'].month - 1][:3]} – {r['bit'].day} "
+                      f"{ui.AYLAR_UZUN[r['bit'].month - 1][:3]} ({r['hafta']} hafta)")
+            yatan = ak.ek_ders_yatan(self._ek_ders_gelirleri or [], r) if self._ek_ders_gelirleri is not None else None
+            karsilastir = []
+            if yatan is not None:
+                fark = yatan - r["net"]
+                karsilastir = [ft.Container(content=ft.Row([
+                    ft.Icon(ft.Icons.VERIFIED_ROUNDED, size=16, color=GELIR),
+                    yazi(f"Yatan: {hb.tl(yatan)}", 12.5, "sb", expand=True),
+                    yazi(f"tahminden {hb.tl(fark, isaret=True)}" + (f" (≈ {sa(round(fark / max(r['net'] / max(r['saat'], 1), 1)))} saat)"
+                                                                     if abs(fark) >= 300 else ""), 11.5,
+                         renk=ui.SOLUK)], spacing=6), bgcolor=saydam(GELIR, "14"), border_radius=10,
+                    padding=ft.Padding(10, 6, 10, 6))]
             kutu.controls = [
                 ft.Row([simge_kutusu(ft.Icons.SCHOOL_ROUNDED, GELIR, 18, 36),
                         ft.Column([yazi("Tahmini ek ders", 15, True),
-                                   yazi(f"{ay_adi} • {odeme} arası yatar", 11.5, renk=ui.SOLUK)], spacing=0, expand=True),
+                                   yazi(f"{ay_adi} • {aralik}", 11.5, renk=ui.SOLUK),
+                                   yazi(f"{odeme} arası yatar", 11.5, renk=ui.SOLUK)], spacing=0, expand=True),
                         ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_size=20, tooltip="Ek ders ayarları",
                                       on_click=lambda e: self.ek_ders_ayar_dialog(lambda: (ciz(), self.guncelle())))],
                        spacing=10),
@@ -2402,17 +2421,35 @@ class EkOzellikler4:
                     ft.IconButton(icon=ft.Icons.ADD_CIRCLE_OUTLINE_ROUNDED, icon_size=24, icon_color=GELIR,
                                   on_click=lambda e: nobet(1))], spacing=2),
                     bgcolor=saydam(GELIR, "14"), border_radius=12, padding=ft.Padding(10, 0, 4, 0)),
-                yazi(f"Her nöbet ≈ +{hb.tl(r['pansiyon_net'])} (net)", 11.5, renk=ui.SOLUK),
+                yazi(f"Her nöbet ≈ +{hb.tl(r['pansiyon_net'])} (net) • ayda en fazla {ak.EK_DERS_PANSIYON_EN_FAZLA}", 11.5,
+                     renk=ui.SOLUK),
+                *karsilastir,
             ]
             if not kompakt:
                 kutu.controls += [
                     yazi(detay, 11.5, renk=ui.SOLUK),
-                    yazi(f"Saat ücreti brüt {hb.tl(r['brut_saat'])} • gelir vergisi %{sa(a['gv_orani'])} "
-                         f"({hb.tl(r['gv'])}) • damga {hb.tl(r['dv'])}. ozkansoft.com EDUHEP 2026 ile aynı hesap; "
-                         "kesin tutar okulunuzun bordrosundadır.", 10.5, renk=ui.SOLUK),
+                    yazi(f"Saat ücreti brüt {hb.tl(r['brut_saat'])} • gelir vergisi %{sa(a['gv_orani'])} − "
+                         f"{hb.tl(a.get('gv_istisna') or 0)} istisna = {hb.tl(r['gv'])} • damga {hb.tl(r['dv'])}. "
+                         "ozkansoft.com EDUHEP 2026 ile aynı hesap; Ekim 2026 bordrosuyla kuruşu kuruşuna tuttu.",
+                         10.5, renk=ui.SOLUK),
                     buton("Yattı – gelir olarak ekle", lambda e: self._ek_ders_gelir_ekle(r), ft.Icons.ADD_ROUNDED,
                           tip="tonal")]
 
+        async def gelirleri_yukle():
+            try:
+                q = hb.urllib.parse.quote("(kategori.ilike.*ek ders*,urun.ilike.*ek ders*,aciklama.ilike.*ek ders*)")
+                self._ek_ders_gelirleri = await self.arka(
+                    self.supa.tablo, "hb_islemler", f"select=tur,tutar,tarih,kategori,urun,aciklama&tur=eq.Gelir&or={q}"
+                                                    "&order=tarih.desc&limit=60")
+            except Exception as e:
+                print("Ek ders gelirleri okunamadı:", e)
+                self._ek_ders_gelirleri = [i for i in (self.tum_islemler or self.islemler) if i.get("tur") == "Gelir"]
+            ciz()
+            self.guncelle()
+
+        if not hasattr(self, "_ek_ders_gelirleri"):
+            self._ek_ders_gelirleri = None
+        self.page.run_task(gelirleri_yukle)  # yeni eklenen ek ders geliri de görünsün
         ciz()
         return kart(kutu, shadow=golge(0.5))
 
@@ -2427,39 +2464,53 @@ class EkOzellikler4:
 
     def ek_ders_ayar_dialog(self, sonra=None):
         a = self.ek_ders_ayari()
+        program = {**ak.EK_DERS_VARSAYILAN["program"], **(a.get("program") or {})}
 
-        def alan(etiket, anahtar, ipucu=None):
-            v = a.get(anahtar)
-            return ft.TextField(label=etiket, value="" if v is None else ("%s" % (int(v) if float(v).is_integer() else v)).replace(".", ","), dense=True,
-                                keyboard_type=ft.KeyboardType.NUMBER, helper_text=ipucu)
+        def tf(etiket, v, ipucu=None):
+            return ft.TextField(label=etiket, value="" if v is None else ("%s" % (int(v) if float(v).is_integer() else v)).replace(".", ","),
+                                dense=True, keyboard_type=ft.KeyboardType.NUMBER, helper_text=ipucu)
         y, m = self._ek_ders_ay()
+        gunler = {str(g): tf(f"{ak.GUN_ADLARI[g]} (saat)", program.get(str(g), 0),
+                             "Gündüz + okul nöbeti + ek ders yerine geçen görev" if g == 0 else None) for g in range(5)}
         alanlar = {
-            "ders": alan("Haftalık derse giriş (saat)", "ders"),
-            "maas_karsiligi": alan("Maaş karşılığı (saat)", "maas_karsiligi"),
-            "hazirlik": alan("Hazırlık ve planlama (haftalık saat)", "hazirlik"),
-            "okul_nobeti": alan("Okul nöbeti (haftalık saat)", "okul_nobeti"),
-            "kulup": alan("Kulüp (haftalık saat)", "kulup"),
-            "pansiyon_saat": alan("1 pansiyon nöbeti kaç saat?", "pansiyon_saat"),
-            "ara_tatil_gunluk": alan("Ara tatilde günlük ödenen saat", "ara_tatil_gunluk"),
-            "gv_orani": alan("Gelir vergisi oranı (%)", "gv_orani", "Yıl içinde %15 → %20'ye çıkabilir; bordronuza bakın"),
-            "brut": alan("Brüt saat ücreti (₺) – boş: otomatik", "brut",
-                         f"Otomatik: {ak.ek_ders_brut(y, m):.4f} ₺ (ozkansoft EDUHEP)"),
+            "pansiyon_saat": tf("1 pansiyon nöbeti (belleticilik) kaç saat?", a.get("pansiyon_saat")),
+            "ara_tatil_gunluk": tf("Ara tatilde günlük ödenen saat", a.get("ara_tatil_gunluk")),
+            "diger_saat": tf("Diğer ek ders (aylık saat)", a.get("diger_saat"), "DYK, sınav görevi vb. – her ay eklenir"),
+            "gv_orani": tf("Gelir vergisi dilimi (%)", a.get("gv_orani"), "Ekim 2026 bordronuz %20 ile tuttu"),
+            "gv_istisna": tf("Gelir vergisi istisnası (₺/ay)", a.get("gv_istisna"), "2026 2. yarı: 5.615,10 ₺"),
+            "dv_istisna": tf("Damga vergisi istisna matrahı (₺/ay)", a.get("dv_istisna"), "2026 2. yarı: 33.030 ₺"),
+            "brut": tf("Brüt saat ücreti (₺) – boş: otomatik", a.get("brut"),
+                       f"Otomatik: {ak.ek_ders_brut(y, m):.4f} ₺ (ozkansoft EDUHEP)"),
         }
+
+        def oku(tf_, varsayilan):
+            v = (tf_.value or "").strip()
+            if not v:
+                return varsayilan, True
+            n = hb.tutar_coz(v)
+            if n is None or n < 0:
+                self.bildir(f"Geçersiz sayı: {tf_.label}", GIDER)
+                return None, False
+            return n, True
 
         def kaydet():
             yeni = dict(a)
-            for k, tf in alanlar.items():
-                v = (tf.value or "").strip()
-                if not v:
-                    yeni[k] = None if k == "brut" else ak.EK_DERS_VARSAYILAN[k]
-                    continue
-                n = hb.tutar_coz(v)
-                if n is None or n < 0:
-                    self.bildir(f"Geçersiz sayı: {tf.label}", GIDER)
+            pr = {}
+            for g, t in gunler.items():
+                n, ok = oku(t, 0)
+                if not ok:
+                    return False
+                pr[g] = n
+            yeni["program"] = pr
+            for k, t in alanlar.items():
+                n, ok = oku(t, None if k == "brut" else ak.EK_DERS_VARSAYILAN[k])
+                if not ok:
                     return False
                 yeni[k] = n
             self._ek_ders_kaydet(yeni)
             self.bildir("Ek ders ayarları kaydedildi ✓", GELIR)
             if sonra:
                 sonra()
-        self._girdi_dialog("Ek ders ayarları", list(alanlar.values()), kaydet)
+        self._girdi_dialog("Ek ders ayarları",
+                           [yazi("Haftalık program (puantajdaki gibi)", 13, True), *gunler.values(), *alanlar.values()],
+                           kaydet)
