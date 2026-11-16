@@ -853,6 +853,7 @@ class EkOzellikler3:
         if eklenen:
             self.bildir(f"🎒 {eklenen} günlük okul harçlığı otomatik eklendi")
             await self.verileri_yenile()
+        await self.faturalari_esle(sessiz=True)  # önceden eklenmiş faturaları eski ödemelerle eşleştir
         if self.mail_otomatik(4):
             self.page.run_task(self.mail_kontrol, True)
         await self.aktuel_yukle()

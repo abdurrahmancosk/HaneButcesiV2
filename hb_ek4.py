@@ -936,15 +936,18 @@ class EkOzellikler4:
                 if k:
                     eklenen.append(k)
             self._yerel_yaz("mail_gorulen", list(gorulen)[-800:])
+            if eklenen:
+                await self.ek_verileri_yenile()
+                await self.faturalari_esle(sessiz=True)
             if ekstreler:
                 self._bekleyen_ekstre = ekstreler[-1]
             sonuc = (f"{len(eklenen)} yeni fatura" if eklenen else "yeni fatura yok") + \
                     (f", {len(ekstreler)} kart ekstresi" if ekstreler else "") + (f", {hatalar} mail okunamadı" if hatalar else "")
             self._yerel_ayar_yaz(mail=dict(self.mail_ayari() or a, son_kontrol=hb.iso_tarih(hb.simdi()), son_sonuc=sonuc))
             if eklenen:
-                self.bildir("📧 " + ", ".join(f"{k['tur']} {hb.tl(k['tutar'])}" for k in eklenen[:3]) + " faturası e-postadan eklendi",
+                odenen = sum(1 for k in eklenen if k.get("odendi"))
+                self.bildir(f"📧 E-postadan {len(eklenen)} fatura eklendi" + (f" ({odenen} tanesi ödenmiş olarak)" if odenen else ""),
                             GELIR)
-                await self.ek_verileri_yenile()
             elif not sessiz:
                 self.bildir(f"📧 E-posta kontrol edildi: {sonuc}")
             if ekstreler and not sessiz:
@@ -984,6 +987,17 @@ class EkOzellikler4:
             kayit["analiz"] = ak.fatura_karsilastir(kayit, onceki)
         except Exception:
             pass
+        odeme = await self.fatura_odemesini_bul(kayit)
+        if odeme:
+            kayit.update(odendi=True, odeme_islem_id=odeme["id"])
+        elif f.get("son_odeme"):
+            try:
+                if (hb.simdi().date() - dt.date.fromisoformat(f["son_odeme"])).days > 20:
+                    kayit["odendi"] = True  # eski fatura; ödemesi kayıtlarda yoksa da ödenmiş varsayılır
+                    kayit["analiz"] = ((kayit.get("analiz") or "") + "\nE-postadan bulunan eski fatura: ödenmiş sayıldı "
+                                       "(kasadan düşülmedi).").strip()
+            except Exception:
+                pass
         try:
             sonuc = await self.arka(self.supa.fatura_mailden_ekle, kayit)
         except hb.ApiHatasi as ex:
@@ -1125,3 +1139,111 @@ class EkOzellikler4:
                            [tur, kurum, no, gun, aktif] + ([yazi("Kimin kasasından ödenir?", 12, renk=ui.SOLUK), kasa]
                                                             if self.yonetici else []), kaydet,
                            ek_eylem=sil if ab.get("id") else None)
+
+    # ================================================================== fatura ↔ ödeme eşleştirme
+    _FATURA_IZLERI = {"Elektrik": ["elektrik", "enerji", "edaş", "edas", "aras", "ck ", "enerjisa"],
+                      "Su": ["su ", "su fat", "aski", "eski", "iski", "suski", "belediye"],
+                      "Doğalgaz": ["doğalgaz", "dogalgaz", "gaz", "palen", "igdaş", "başkentgaz", "aksa"],
+                      "İnternet": ["internet", "türk telekom", "turk telekom", "superonline", "turknet", "ttnet", "fiber"],
+                      "Telefon": ["telefon", "turkcell", "vodafone", "türk telekom", "fatura"],
+                      "Aidat": ["aidat", "yönetim", "site"], "Kira": ["kira"]}
+
+    async def fatura_odemesini_bul(self, f, kullanilan=None):
+        """Faturanın tutarına ve tarihine uyan, daha önce kaydedilmiş bir ödeme (gider) arar."""
+        try:
+            tutar = float(f.get("tutar") or 0)
+        except Exception:
+            return None
+        if tutar <= 0:
+            return None
+        bugun = hb.simdi().date()
+
+        def gun(x):
+            try:
+                return dt.date.fromisoformat(str(x)[:10]) if x else None
+            except Exception:
+                return None
+
+        so = gun(f.get("son_odeme"))
+        ft_ = gun(f.get("fatura_tarihi"))
+        bas = (ft_ or (so - dt.timedelta(days=20) if so else bugun - dt.timedelta(days=60))) - dt.timedelta(days=5)
+        bit = (so or bas + dt.timedelta(days=30)) + dt.timedelta(days=40)
+        pay = max(1.0, tutar * 0.01)
+        q = hb.urllib.parse.quote
+        b1 = hb.iso_tarih(dt.datetime(bas.year, bas.month, bas.day, tzinfo=hb.TZ))
+        b2 = hb.iso_tarih(dt.datetime(bit.year, bit.month, bit.day, tzinfo=hb.TZ))
+        sorgu = (f"select=id,tutar,tarih,urun,firma,kategori,aciklama&tur=eq.Gider&tutar=gte.{tutar - pay:.2f}"
+                 f"&tutar=lte.{tutar + pay:.2f}&tarih=gte.{q(b1)}&tarih=lt.{q(b2)}&order=tarih&limit=30")
+        try:
+            adaylar = await self.arka(self.supa.tablo, "hb_islemler", sorgu)
+        except Exception:
+            return None
+        kullanilan = kullanilan if kullanilan is not None else {x.get("odeme_islem_id") for x in self.ek.get("faturalar", [])
+                                                               if x.get("odeme_islem_id")}
+        izler = [i for i in self._FATURA_IZLERI.get(f.get("tur"), [])] + \
+                ([hb.urun_anahtari(f["kurum"]).split(" ")[0]] if f.get("kurum") else []) + [hb.urun_anahtari(f.get("tur") or "")]
+        en_iyi, puan = None, -1
+        for a in adaylar:
+            if a.get("id") in kullanilan or abs(float(a.get("tutar") or 0) - tutar) > pay:
+                continue
+            if not bas <= hb.tarih_yerel(a["tarih"]).date() < bit:
+                continue
+            metin = " " + hb.urun_anahtari(" ".join(str(a.get(k) or "") for k in ("urun", "firma", "aciklama", "kategori"))) + " "
+            p = 0
+            if any(iz and iz.strip() and iz.strip() in metin for iz in izler):
+                p += 3
+            if "fatura" in metin or "aidat" in metin:
+                p += 2
+            p -= abs(float(a["tutar"]) - tutar)  # kuruş farkı az olan önce
+            if so:
+                p -= abs((hb.tarih_yerel(a["tarih"]).date() - so).days) / 30
+            if p > puan:
+                en_iyi, puan = a, p
+        # metin ipucu yoksa yalnızca birebir tutar kabul edilir
+        if en_iyi and (puan >= 1 or abs(float(en_iyi["tutar"]) - tutar) < 0.01):
+            return en_iyi
+        return None
+
+    async def faturalari_esle(self, sessiz=True):
+        """Ödenmemiş görünen faturaları eski kayıtlardaki ödemelerle eşleştirir."""
+        if getattr(self, "_eslestiriyor", False):
+            return 0
+        self._eslestiriyor = True
+        n = eski = 0
+        try:
+            kullanilan = {x.get("odeme_islem_id") for x in self.ek.get("faturalar", []) if x.get("odeme_islem_id")}
+            bugun = hb.simdi().date()
+            for f in list(self.ek.get("faturalar", [])):
+                if f.get("odendi") or not f.get("id"):
+                    continue
+                if not self.yonetici and f.get("kasa_sahibi") != self.ben["id"]:
+                    continue
+                odeme = await self.fatura_odemesini_bul(f, kullanilan)
+                if odeme:
+                    kullanilan.add(odeme["id"])
+                    await self.arka(self.supa.tablo_guncelle, "hb_faturalar", f["id"],
+                                    {"odendi": True, "odeme_islem_id": odeme["id"]})
+                    f.update(odendi=True, odeme_islem_id=odeme["id"])
+                    n += 1
+                elif f.get("mail_id") and f.get("son_odeme"):
+                    try:
+                        so = dt.date.fromisoformat(str(f["son_odeme"])[:10])
+                    except Exception:
+                        continue
+                    if (bugun - so).days > 20:  # e-postadan bulunan eski fatura: ödenmiş say, kasaya dokunma
+                        await self.arka(self.supa.tablo_guncelle, "hb_faturalar", f["id"], {"odendi": True})
+                        f["odendi"] = True
+                        eski += 1
+        except Exception as ex:
+            print("Fatura eşleştirme:", ex)
+        finally:
+            self._eslestiriyor = False
+        if n or eski:
+            await self.ek_verileri_yenile()
+            if not sessiz or n or eski:
+                self.bildir("✓ " + ", ".join(x for x in [f"{n} fatura eski kayıtlardaki ödemeyle eşleşti" if n else "",
+                                                         f"{eski} eski fatura ödenmiş sayıldı" if eski else ""] if x), GELIR)
+            self.ekrani_ciz()
+        elif not sessiz:
+            self.bildir("Eşleşen ödeme bulunamadı.")
+        return n + eski

@@ -472,6 +472,8 @@ class EkOzellikler:
             ft.Column([yazi("E-postadan otomatik" if mail.get("sifre") else "Faturaları e-postadan otomatik al", 13, "sb"),
                        yazi(self._mail_durum_metni() if mail.get("sifre") else "Gmail'i bağlayın: Menü > Ayarlar", 11,
                             renk=ui.SOLUK)], spacing=0, expand=True),
+            ft.IconButton(icon=ft.Icons.PLAYLIST_ADD_CHECK_ROUNDED, tooltip="Ödemeleri eşleştir",
+                          on_click=lambda e: self.page.run_task(self.faturalari_esle, False)),
             ft.IconButton(icon=ft.Icons.REFRESH_ROUNDED, tooltip="Şimdi kontrol et",
                           on_click=lambda e: self.page.run_task(self.mail_kontrol, False)) if mail.get("sifre") else
             ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.SOLUK)], spacing=10),
