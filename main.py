@@ -5,6 +5,7 @@ Flet (Android/Windows) + Supabase (giriş, veritabanı, anlık senkron, fiş dep
 import asyncio
 import datetime as dt
 import inspect
+import urllib.parse
 import uuid
 
 import flet as ft
@@ -12,7 +13,7 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.11.0"
+SURUM = "2.12.1"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler
@@ -156,6 +157,49 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
 
     def izinli(self, islem):
         return self.yonetici or islem.get("ekleyen") == self.ben["id"]
+
+    def uyeler(self):
+        return [pid for pid, p in self.profiller.items() if p.get("rol") != "yonetici"]
+
+    def uyeye_acik(self, i, gizli_say=True):
+        """Kayıt üye (Hatice) tarafından görülür mü? Sunucudaki kuralın aynısı: gelirler (kendi kasasınınkiler
+        hariç) ve “Hatice'den gizle” işaretli kayıtlar dışında her şey görünür."""
+        if gizli_say and i.get("gizli"):
+            return False
+        return i.get("tur") != "Gelir" or i.get("kasa_sahibi") in set(self.uyeler())
+
+    def gorunur(self, kayitlar):
+        """Üyede (Hatice) sunucudaki kurala ek güvence: gizli kayıtlar, başka kasaların gelirleri ve aktarımları
+        hiçbir ekrana gelmez. Yöneticide olduğu gibi döner."""
+        if not self.ben or self.yonetici or self.ben.get("rol") == "yonetici":
+            return kayitlar or []
+        ben = self.ben["id"]
+        return [i for i in (kayitlar or []) if not i.get("gizli") and (i.get("tur") != "Gelir" or i.get("kasa_sahibi") == ben)]
+
+    def rapor_kayitlari(self, kayitlar):
+        """Rapor / yapay zeka bağlamı: üyede gelir kayıtları hiç yer almaz (hanenin harcama raporu)."""
+        kayitlar = self.gorunur(kayitlar)
+        return kayitlar if self.yonetici else [i for i in kayitlar if i.get("tur") != "Gelir"]
+
+    def sahip_yetkili(self, x):
+        """Öde / düzenle / sil / sat yetkisi: yönetici ya da kaydın kendi kasasına ait olması. Hatice başkasının
+        faturasını, düzenli ödemesini, taksidini, hedefini, borcunu, varlığını görür ama değiştiremez."""
+        return self.yonetici or (x or {}).get("kasa_sahibi") == (self.ben or {}).get("id")
+
+    def fatura_yetkili(self, f):
+        return self.sahip_yetkili(f)
+
+    def sahip_etiketi(self, x):
+        """Başkasının kasasına ait kayıtta sahibin adı (tek kişilik hanede boş)."""
+        s = (x or {}).get("kasa_sahibi")
+        return self.ad(s) if s and len(self.profiller) > 1 and s != (self.ben or {}).get("id") else None
+
+    def salt_okunur(self, x, ne="kayıt"):
+        """Yetkisiz işlem denemesinde uyarır; True dönerse işlem yapılmaz."""
+        if self.sahip_yetkili(x):
+            return False
+        self.bildir(f"Bu {ne} {self.ad(x.get('kasa_sahibi'))} kasasına ait; yalnızca görüntüleyebilirsiniz.", GIDER)
+        return True
 
     async def arka(self, f, *a):
         return await asyncio.to_thread(f, *a)
@@ -364,13 +408,14 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             self.islemler, self.bakiyeler, _, _ = await asyncio.gather(
                 self.arka(self.supa.islemler, bas, bit), self.arka(self.supa.bakiyeler), self.ek_verileri_yenile(),
                 self.bildirimleri_yukle())
+            self.islemler = self.gorunur(self.islemler)
             onceki_cevrimdisi = self.cevrimdisi
             self.cevrimdisi = False
             if self.donem_ofset == 0:
                 self.onbellege_yaz()
             if self.tum_zamanlar:
-                self.tum_islemler = await self.arka(self.supa.tablo, "hb_islemler",
-                                                    "select=*&order=tarih.desc,id.desc&limit=20000")
+                self.tum_islemler = self.gorunur(await self.arka(self.supa.tablo, "hb_islemler",
+                                                                 "select=*&order=tarih.desc,id.desc&limit=20000"))
             if self.bekleyenler:
                 self.page.run_task(self.bekleyenleri_gonder)
             if getattr(self, "_hazir", False) and self.ben:
@@ -535,7 +580,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         kr = self.kisi_renk(i.get("ekleyen")) if i.get("ekleyen") in self.profiller else ui.CIZGI
         etiketler = [ft.Icon(ft.Icons.PERSON_ROUNDED, size=12, color=kr if kr != ui.CIZGI else ui.SOLUK),
                      yazi(i.get("ekleyen_ad") or "?", 10.5, renk=ui.SOLUK)]
-        if self.yonetici and tur != "Aktarım":
+        if len(self.profiller) > 1 and tur != "Aktarım":
             etiketler += [ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, size=12, color=ui.SOLUK),
                           yazi(self.ad(i.get("kasa_sahibi")), 10.5, renk=ui.SOLUK)]
         if i.get("fis_gorsel"):
@@ -600,7 +645,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
 
         tum = self.tum_zamanlar and self.tum_islemler is not None
         kaynak = self.tum_islemler if tum else self.islemler
-        oz = hb.donem_ozeti(kaynak, None if self.yonetici else self.ben["id"])
+        oz = hb.donem_ozeti(kaynak, None)  # hane harcamaları (üyeye başka kasaların gelirleri hiç gelmez)
+        oz_ben = oz if self.yonetici else hb.donem_ozeti(kaynak, self.ben["id"])
         ek_kartlar = []
         if self.cevrimdisi or self.bekleyenler:
             ek_kartlar.append(kart(ft.Row([
@@ -622,11 +668,17 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         kontroller = [ust, *ek_kartlar, kasa_karti, *([gk] if gk else []), *butce_kartlari, *self.ozet_ekleri(),
                       self.donem_cubugu()]
 
-        kontroller.append(ft.Row([
-            self._ozet_kutu("Gelir", oz["gelir"], GELIR, ft.Icons.SOUTH_WEST_ROUNDED),
-            self._ozet_kutu("Gider", oz["gider"], GIDER, ft.Icons.NORTH_EAST_ROUNDED),
-            self._ozet_kutu("Net", oz["net"], ANA if oz["net"] >= 0 else GIDER, ft.Icons.BALANCE_ROUNDED),
-        ], spacing=8))
+        if self.yonetici:
+            kontroller.append(ft.Row([
+                self._ozet_kutu("Gelir", oz["gelir"], GELIR, ft.Icons.SOUTH_WEST_ROUNDED),
+                self._ozet_kutu("Gider", oz["gider"], GIDER, ft.Icons.NORTH_EAST_ROUNDED),
+                self._ozet_kutu("Net", oz["net"], ANA if oz["net"] >= 0 else GIDER, ft.Icons.BALANCE_ROUNDED),
+            ], spacing=8))
+        else:
+            kontroller.append(ft.Row([
+                self._ozet_kutu("Hane gideri", oz["gider"], GIDER, ft.Icons.HOME_ROUNDED),
+                self._ozet_kutu("Benim giderim", oz_ben["gider"], self.kisi_renk(self.ben["id"]), ft.Icons.PERSON_ROUNDED),
+            ], spacing=8))
 
         # --- Harcama temposu + günlük grafik ---
         bugun = hb.simdi().date()
@@ -634,14 +686,15 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         gecen_gun = min(max((bugun - bas).days + 1, 1), toplam_gun) if bugun >= bas else 0
         gunluk = {}
         for i in self.islemler:
-            if i.get("tur") != "Gider" or (not self.yonetici and i.get("kasa_sahibi") != self.ben["id"]):
+            if i.get("tur") != "Gider":
                 continue
             g = hb.tarih_yerel(i.get("tarih")).date()
             gunluk[g] = gunluk.get(g, 0) + float(i.get("tutar") or 0)
         if gecen_gun and not tum:
             ort = oz["gider"] / gecen_gun
             tahmin = ort * toplam_gun
-            oran = (oz["gider"] / oz["gelir"]) if oz["gelir"] else None
+            gelir_var = self.yonetici and oz["gelir"]
+            oran = (oz["gider"] / oz["gelir"]) if gelir_var else None
             tempo = [
                 ft.Row([yazi("Harcama temposu", 15, True, expand=True),
                         yazi(f"{gecen_gun}/{toplam_gun}. gün", 11, renk=ui.SOLUK)]),
@@ -653,10 +706,13 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                     ft.Column([
                         ft.Row([yazi("Günlük ortalama", 12, renk=ui.SOLUK, expand=True), yazi(hb.tl(ort), 13, True)]),
                         ft.Row([yazi("Dönem sonu tahmini", 12, renk=ui.SOLUK, expand=True),
-                                yazi(hb.tl(tahmin), 13, True, renk=GIDER if oz["gelir"] and tahmin > oz["gelir"] else ui.YAZI)]),
-                        ft.Row([yazi("Gelirin harcanan kısmı", 12, renk=ui.SOLUK, expand=True),
-                                yazi(f"%{int(oran * 100)}" if oran is not None else "—", 13, True,
-                                     renk=GIDER if oran and oran > 0.9 else ui.YAZI)]),
+                                yazi(hb.tl(tahmin), 13, True, renk=GIDER if gelir_var and tahmin > oz["gelir"] else ui.YAZI)]),
+                        *([ft.Row([yazi("Gelirin harcanan kısmı", 12, renk=ui.SOLUK, expand=True),
+                                   yazi(f"%{int(oran * 100)}" if oran is not None else "—", 13, True,
+                                        renk=GIDER if oran and oran > 0.9 else ui.YAZI)])] if self.yonetici else
+                          [ft.Row([yazi("Benim payım", 12, renk=ui.SOLUK, expand=True),
+                                   yazi(f"%{int(100 * oz_ben['gider'] / oz['gider'])}" if oz["gider"] else "—", 13,
+                                        True)])]),
                     ], spacing=4, expand=True),
                 ], spacing=14),
             ]
@@ -681,14 +737,14 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             except Exception as e:
                 print("Takvim çizilemedi:", e)
 
-        if not self.yonetici and (oz["aktarim_giris"] or oz["aktarim_cikis"]):
+        if not self.yonetici and (oz_ben["aktarim_giris"] or oz_ben["aktarim_cikis"]):
             kontroller.append(kart(ft.Row([
                 simge_kutusu(ft.Icons.SWAP_HORIZ_ROUNDED, AKTARIM, kutu=34, boyut=18),
                 yazi("Aktarımlar", 13, True, expand=True),
-                yazi(f"+{hb.tl(oz['aktarim_giris'])}", 12, True, renk=GELIR),
-                yazi(f"-{hb.tl(oz['aktarim_cikis'])}", 12, True, renk=GIDER)], spacing=10), shadow=golge(0.5)))
+                yazi(f"+{hb.tl(oz_ben['aktarim_giris'])}", 12, True, renk=GELIR),
+                yazi(f"-{hb.tl(oz_ben['aktarim_cikis'])}", 12, True, renk=GIDER)], spacing=10), shadow=golge(0.5)))
 
-        if self.yonetici and len(self.profiller) > 1:
+        if len(self.profiller) > 1:
             satirlar = [yazi("Kim ne harcadı?", 15, True)]
             toplam_g = sum(hb.donem_ozeti(kaynak, p)["gider"] for p in self.profiller) or 1
             for pid in self.profiller:
@@ -771,7 +827,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             for i in (self.tum_islemler if self.tum_zamanlar and self.tum_islemler is not None else self.islemler):
                 if f["tur"] != "Tümü" and i.get("tur") != f["tur"]:
                     continue
-                if self.yonetici and kid and i.get("kasa_sahibi") != kid and i.get("hedef_kasa") != kid:
+                if kid and i.get("kasa_sahibi") != kid and i.get("hedef_kasa") != kid:
                     continue
                 if ara:
                     metin = hb.urun_anahtari(" ".join(str(i.get(k) or "") for k in
@@ -828,7 +884,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                              border_radius=16, border_color="transparent", dense=True)
         doldur()
         ust = [self.donem_cubugu(), ft.Container(content=arama, shadow=golge(0.4), border_radius=16), cipler]
-        if self.yonetici:
+        if len(self.profiller) > 1:
             ust.append(kasa_cipleri)
         return ft.ListView(padding=16, spacing=10, expand=True, controls=ust + [liste, ft.Container(height=70)])
 
@@ -844,7 +900,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                                       bgcolor=kat_stil(k)[1]) for k, v in sorted(kat.items(), key=lambda kv: -kv[1])[:6]],
                         spacing=2)
         etiketler = [ft.Icon(ft.Icons.PERSON_ROUNDED, size=12, color=ui.SOLUK), yazi(ilk.get("ekleyen_ad") or "?", 10.5, renk=ui.SOLUK)]
-        if self.yonetici:
+        if len(self.profiller) > 1:
             etiketler += [ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, size=12, color=ui.SOLUK),
                           yazi(self.ad(ilk.get("kasa_sahibi")), 10.5, renk=ui.SOLUK)]
         if any(x.get("gizli") for x in satirlar):
@@ -922,6 +978,15 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         eylemler = []
         if ilk.get("fis_gorsel"):
             eylemler.append(buton("Fişi gör", gorsel, ft.Icons.IMAGE_ROUNDED, tip="text"))
+        if self.yonetici and self.uyeler() and ilk.get("id") not in (None, -1) and \
+                all(self.uyeye_acik(x, gizli_say=False) for x in satirlar):
+            hepsi_gizli = all(x.get("gizli") for x in satirlar)
+
+            async def gizlilik(e):
+                self.dialog_kapat(d)
+                await self.gizlilik_degistir(satirlar, not hepsi_gizli)
+            eylemler.append(buton("Göster" if hepsi_gizli else "Gizle", gizlilik,
+                                  ft.Icons.LOCK_OPEN_ROUNDED if hepsi_gizli else ft.Icons.LOCK_ROUNDED, tip="text"))
         if all(self.izinli(x) for x in satirlar):
             eylemler.append(buton("Fişi sil", sil_onay, ft.Icons.DELETE_ROUNDED, tip="text"))
         if len(self.profiller) > 1 and ilk.get("id") not in (None, -1):
@@ -1113,10 +1178,9 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                          ("Firma", i.get("firma")), ("Ürün / Açıklama", i.get("urun")), ("Miktar", i.get("miktar"))]
             if i.get("birim_fiyat"):
                 satirlar.append(("Birim fiyat", hb.tl(i.get("birim_fiyat"))))
-        if self.yonetici:
+        if self.yonetici and self.uyeler():
             satirlar.append(("Görünürlük", "🔒 Hatice'den gizli" if i.get("gizli") else "Hatice görebilir"
-                             if (i.get("kasa_sahibi") != self.ben["id"] or i.get("tur") == "Aktarım")
-                             else "Sizin kasanız (Hatice zaten görmez)"))
+                             if self.uyeye_acik(i) else "Hatice görmez (gelir)"))
         satirlar += [("Not", i.get("aciklama")), ("Ekleyen", i.get("ekleyen_ad")),
                      ("Eklenme", hb.tarih_goster(i.get("olusturma")))]
         if i.get("fis_grup"):
@@ -1165,6 +1229,14 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         eylemler = []
         if i.get("fis_gorsel"):
             eylemler.append(buton("Fişi gör", fis_goster, ft.Icons.IMAGE, tip="text"))
+        if self.yonetici and self.uyeler() and i.get("id") not in (None, -1) and self.uyeye_acik(i, gizli_say=False):
+            grup = [x for x in self.islemler if i.get("fis_grup") and x.get("fis_grup") == i.get("fis_grup")] or [i]
+
+            async def gizlilik(e):
+                self.dialog_kapat(d)
+                await self.gizlilik_degistir(grup, not i.get("gizli"))
+            eylemler.append(buton("Göster" if i.get("gizli") else "Gizle", gizlilik,
+                                  ft.Icons.LOCK_OPEN_ROUNDED if i.get("gizli") else ft.Icons.LOCK_ROUNDED, tip="text"))
         if self.izinli(i):
             eylemler.append(buton("Düzenle", duzenle, ft.Icons.EDIT, tip="text"))
             eylemler.append(buton("Sil", lambda e: sil_onay(False), ft.Icons.DELETE, tip="text"))
@@ -1178,6 +1250,22 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         eylemler.append(buton("Kapat", lambda e: self.dialog_kapat(d), tip="text"))
         d.actions = eylemler
         self.dialog_ac(d)
+
+    async def gizlilik_degistir(self, kayitlar, gizli):
+        """Yönetici: kaydı (fişse fişin tüm satırlarını) Hatice'den gizler ya da gösterir."""
+        try:
+            grup = kayitlar[0].get("fis_grup") if kayitlar else None
+            if grup and len(kayitlar) > 1:
+                await self.arka(self.supa.tablo_guncelle_filtre, "hb_islemler",
+                                f"fis_grup=eq.{urllib.parse.quote(str(grup))}", {"gizli": bool(gizli)})
+            else:
+                for x in kayitlar:
+                    await self.arka(self.supa.islem_guncelle, x["id"], {"gizli": bool(gizli)})
+            self.bildir(("🔒 Hatice'den gizlendi" if gizli else "🔓 Hatice artık görebilir") +
+                        (f" ({len(kayitlar)} satır)" if len(kayitlar) > 1 else ""), GELIR)
+            await self.verileri_yenile()
+        except Exception as ex:
+            self.bildir(f"Değiştirilemedi: {ex}", GIDER)
 
     async def fis_gorseli_goster(self, yol):
         if not yol:
@@ -1665,9 +1753,11 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
 
             kontroller.append(kart(ft.Column([
                 yazi("Gizlilik", 14, True),
-                yazi("Hatice sizin kasanızı hiç göremez. 'Gizli' işaretlediğiniz kayıtlar (Hatice'nin kasasına "
-                     "yazılan veya ona yapılan aktarım dahil) da Hatice'ye gösterilmez; kasa toplamı yine doğru "
-                     "hesaplanır. Bu seçenek yalnızca sizde vardır.", 11, renk=ui.SOLUK),
+                yazi("Hatice gelirleri ve 'Gizli' işaretlediğiniz kayıtları görmez; geri kalan her şeyi (harcamalar, "
+                     "aktarımlar, faturalar, düzenli ödemeler, taksitler, hedefler, borçlar, altın/döviz) görür ama "
+                     "yalnızca kendi kasasınınkini değiştirebilir. Kasa bakiyeniz ve toplam kasa ona gösterilmez. Bir kaydı "
+                     "ya da fişi gizlemek için ona dokunup “Gizle” deyin. Bu seçenek yalnızca sizde vardır.",
+                     11, renk=ui.SOLUK),
                 ft.Checkbox(label="Yeni kayıtlarımı varsayılan olarak Hatice'den gizle",
                             value=self.gizli_varsayilan, on_change=gizli_degisti),
             ], spacing=8)))

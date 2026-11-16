@@ -189,11 +189,10 @@ class EkOzellikler4:
         bugun = hb.simdi().date()
         sonuc = []
         for (kartadi, sahip, vade), ts in self.taksit_gruplari():
-            if not self.yonetici and sahip != self.ben["id"]:
-                continue
             kalan = (vade - bugun).days
             if kalan > 3:
                 continue
+            etiket = self.sahip_etiketi({"kasa_sahibi": sahip})
             toplam = sum(float(t["aylik_tutar"]) for t in ts)
             if kalan < 0:
                 seviye, ne = "gecikti", f"{-kalan} gün gecikti"
@@ -203,17 +202,15 @@ class EkOzellikler4:
                 seviye, ne = "yarin", "YARIN"
             else:
                 seviye, ne = "yakin", f"{kalan} gün kaldı"
-            sonuc.append({"seviye": seviye, "metin": f"💳 {kartadi} taksit ödemesi {ne} ({hb.tl(toplam)})",
-                          "sayfa": "taksitler"})
+            sonuc.append({"seviye": seviye, "metin": (f"{etiket} • " if etiket else "") +
+                          f"💳 {kartadi} taksit ödemesi {ne} ({hb.tl(toplam)})", "sayfa": "taksitler"})
         return sonuc
 
     def taksit_ay_yuku(self, ay_sayisi=6):
         bugun = hb.simdi().date()
         aylar = [(bugun.year + (bugun.month - 1 + n) // 12, (bugun.month - 1 + n) % 12 + 1) for n in range(ay_sayisi)]
         yuk = {a: 0.0 for a in aylar}
-        for t in self.taksitler:
-            if not self.yonetici and t["kasa_sahibi"] != self.ben["id"]:
-                continue
+        for t in self.taksitler:  # hanenin taksitleri (Hatice de herkesinkini görür)
             for vade, tutar in taksit_takvimi(t, ay_sayisi + 2):
                 if (vade.year, vade.month) in yuk:
                     yuk[(vade.year, vade.month)] += tutar
@@ -221,9 +218,9 @@ class EkOzellikler4:
 
     # ================================================================== kredi kartı sayfası
     def kart_ekstreleri(self, odenmemis=True):
-        """Görünür kredi kartı ekstreleri (Faturalar tablosunda tür = Kredi kartı), son ödemeye göre sıralı."""
-        sonuc = [f for f in self.ek.get("faturalar", []) if f.get("tur") == KART_TURU
-                 and (self.yonetici or f.get("kasa_sahibi") == self.ben["id"])]
+        """Görünür kredi kartı ekstreleri (Faturalar tablosunda tür = Kredi kartı), son ödemeye göre sıralı.
+        Faturaları herkes görür; ödeme / düzenleme yalnızca kendi kasasınınkine (fatura_yetkili)."""
+        sonuc = [f for f in self.ek.get("faturalar", []) if f.get("tur") == KART_TURU]
         if odenmemis is True:
             sonuc = [f for f in sonuc if not f.get("odendi")]
         elif odenmemis is False:
@@ -247,12 +244,14 @@ class EkOzellikler4:
     def sayfa_taksitler(self):
         bugun = hb.simdi().date()
         acik = self.kart_ekstreleri()
-        gorunen = [t for t in self.taksitler if self.yonetici or t["kasa_sahibi"] == self.ben["id"]]
+        gorunen = list(self.taksitler)
         kalan_taksit = sum(float(t["aylik_tutar"]) * (int(t["toplam_taksit"]) - int(t.get("odenen") or 0)) for t in gorunen)
         toplam = sum(float(f.get("tutar") or 0) for f in acik) + kalan_taksit
         yuk = self._kart_aylik_yuk()
         enb = max(yuk.values()) or 1
-        siradaki = acik[0] if acik else None
+        kendim = [f for f in acik if self.fatura_yetkili(f)]
+        siradaki = (kendim or acik or [None])[0]
+        baskasinin = bool(siradaki) and not self.fatura_yetkili(siradaki)
 
         cubuklar = ft.Row([ft.Column([
             yazi(f"{v / 1000:.1f}b" if v >= 1000 else (f"{v:.0f}" if v else ""), 9.5, renk=ui.KASA_SOLUK),
@@ -272,16 +271,17 @@ class EkOzellikler4:
             if acil:
                 durum = self.yanip_son(ft.Container(content=durum, bgcolor=saydam(GIDER, "55"), border_radius=8,
                                                     padding=ft.Padding(8, 3, 8, 3)))
+            ode_btn = ft.FilledButton(content=ft.Row([ft.Icon(ft.Icons.CHECK_ROUNDED, size=16, color="#0f172a"),
+                                                      yazi("Ödedim", 13, "sb", renk="#0f172a")], spacing=4, tight=True),
+                                      style=ft.ButtonStyle(bgcolor="#5eead4"),
+                                      on_click=lambda e, f=siradaki: self.fatura_ode(f))
             ust_ic = [
                 ft.Row([yazi("SIRADAKİ KART ÖDEMESİ", 12, "sb", renk=ui.KASA_SOLUK, expand=True),
-                        yazi(("Tahmini • " if ekstre_tahmini_mi(siradaki) else "") + (siradaki.get("kurum") or ""), 11.5,
+                        yazi((f"{self.ad(siradaki.get('kasa_sahibi'))} • " if baskasinin else "") +
+                             ("Tahmini • " if ekstre_tahmini_mi(siradaki) else "") + (siradaki.get("kurum") or ""), 11.5,
                              renk=ui.KASA_SOLUK, max_lines=1)]),
                 ui.para(siradaki.get("tutar") or 0, 34, "#e8edf5", ui.KASA_SOLUK),
-                ft.Row([durum, ft.Container(expand=True),
-                        ft.FilledButton(content=ft.Row([ft.Icon(ft.Icons.CHECK_ROUNDED, size=16, color="#0f172a"),
-                                                        yazi("Ödedim", 13, "sb", renk="#0f172a")], spacing=4, tight=True),
-                                        style=ft.ButtonStyle(bgcolor="#5eead4"),
-                                        on_click=lambda e, f=siradaki: self.fatura_ode(f))],
+                ft.Row([durum, ft.Container(expand=True), *([] if baskasinin else [ode_btn])],
                        vertical_alignment=ft.CrossAxisAlignment.CENTER)]
         else:
             ust_ic = [yazi("KREDİ KARTI", 12, "sb", renk=ui.KASA_SOLUK),
@@ -325,8 +325,12 @@ class EkOzellikler4:
                     ft.Column([ft.Row([yazi(ay, 14, "sb"), *([ft.Container(
                         content=yazi("tahmini", 10, "sb", renk=ui.SOLUK), bgcolor=ui.ZEMIN2, border_radius=8,
                         padding=ft.Padding(6, 1, 6, 1))] if tahmini else [])], spacing=6),
-                        ft.Row([alt_yazi, *([yazi("• " + f["kurum"], 11, renk=ui.SOLUK, max_lines=1, expand=True)]
-                                            if f.get("kurum") else [])], spacing=4)], spacing=1, expand=True),
+                        ft.Row([alt_yazi, *([yazi("• " + " • ".join(x for x in [
+                            self.ad(f.get("kasa_sahibi")) if len(self.profiller) > 1
+                            and f.get("kasa_sahibi") != self.ben["id"] else None, f.get("kurum")] if x),
+                            11, renk=ui.SOLUK, max_lines=1, expand=True)]
+                            if f.get("kurum") or f.get("kasa_sahibi") != self.ben["id"] else [])], spacing=4)],
+                        spacing=1, expand=True),
                     yazi(hb.tl(f.get("tutar") or 0), 15, "xb", renk=ui.SOLUK if tahmini else None),
                     ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.SOLUK, size=18)], spacing=10),
                     padding=ft.Padding(0, 6, 0, 6), on_click=lambda e, f=f: self.fatura_detay(f)))
@@ -356,8 +360,7 @@ class EkOzellikler4:
                                     "tarihi kaydedilir, gelecek ayların taksit toplamları o aylara yazılır. Son gün "
                                     "gelince ikinize de hatırlatılır, “Ödedim” deyince kasadan düşer.", 12.5,
                                     renk=ui.SOLUK)))
-        bitenler = [t for t in self.ek.get("taksitler", []) if int(t.get("odenen") or 0) >= int(t["toplam_taksit"])
-                    and (self.yonetici or t["kasa_sahibi"] == self.ben["id"])]
+        bitenler = [t for t in self.ek.get("taksitler", []) if int(t.get("odenen") or 0) >= int(t["toplam_taksit"])]
         if bitenler and gorunen:
             ogeler.append(yazi(f"Biten taksitler ({len(bitenler)})", 13, "sb", renk=ui.SOLUK))
             ogeler += [ft.Row([ft.Icon(ft.Icons.TASK_ALT_ROUNDED, color=GELIR, size=18), yazi(t["ad"], 12.5, expand=True),
@@ -380,11 +383,13 @@ class EkOzellikler4:
                 satirlar.append(ft.Container(content=ft.Row([
                     ft.Column([yazi(t["ad"], 13.5, "sb"),
                                yazi(f"{n}/{t['toplam_taksit']}. taksit • {t.get('kategori') or 'Diğer'}"
-                                    + (f" • {self.ad(t['kasa_sahibi'])}" if self.yonetici and len(self.profiller) > 1 else ""),
+                                    + (f" • {self.ad(t['kasa_sahibi'])}" if len(self.profiller) > 1 and
+                                       (self.yonetici or self.sahip_etiketi(t)) else ""),
                                     11, renk=ui.SOLUK)], spacing=1, expand=True),
                     yazi(hb.tl(t["aylik_tutar"]), 13.5, "xb"),
                     ft.IconButton(icon=ft.Icons.MORE_VERT_ROUNDED, icon_size=18, tooltip="Düzenle / sil",
-                                  on_click=lambda e, t=t: self.taksit_duzenle(t))], spacing=6),
+                                  on_click=lambda e, t=t: self.taksit_duzenle(t))
+                    if self.sahip_yetkili(t) else ft.Container(width=8)], spacing=6),
                     padding=ft.Padding(0, 4, 0, 4)))
                 satirlar.append(ft.Container(height=4, content=ft.Row([
                     ft.Container(expand=max(1, int(t.get("odenen") or 0)), height=4, border_radius=2, bgcolor=ANA),
@@ -398,12 +403,15 @@ class EkOzellikler4:
                         ft.Column([yazi(f"{kartadi} kartı", 15, True), durum], spacing=0, expand=True),
                         yazi(hb.tl(toplam), 16, "xb")], spacing=10),
                 *satirlar,
-                ft.Row([buton("Ödedim" if len(ts) == 1 else f"Hepsini ödedim ({len(ts)})",
-                              lambda e, ts=ts: self.taksit_ode(ts), ft.Icons.CHECK_ROUNDED)],
-                       alignment=ft.MainAxisAlignment.END)], spacing=6), shadow=golge(0.5)))
+                *([ft.Row([buton("Ödedim" if len(ts) == 1 else f"Hepsini ödedim ({len(ts)})",
+                                 lambda e, ts=ts: self.taksit_ode(ts), ft.Icons.CHECK_ROUNDED)],
+                          alignment=ft.MainAxisAlignment.END)] if self.sahip_yetkili({"kasa_sahibi": sahip}) else [])],
+                spacing=6), shadow=golge(0.5)))
         return ogeler
 
     def taksit_duzenle(self, t=None):
+        if t and self.salt_okunur(t, "taksit"):
+            return
         t = t or {}
         bugun = hb.simdi().date()
         kartlar = sorted({(x.get("kart") or "").strip() for x in self.ek.get("taksitler", []) if x.get("kart")})
@@ -467,6 +475,8 @@ class EkOzellikler4:
                            ek_eylem=sil_eylemi if t.get("id") else None)
 
     def taksit_ode(self, ts):
+        if not ts or self.salt_okunur(ts[0], "taksit"):
+            return
         toplam = sum(float(t["aylik_tutar"]) for t in ts)
         kasa = self._kasa_secici(ts[0]["kasa_sahibi"])
         tarih = ft.TextField(label="Ödeme tarihi", value=hb.simdi().strftime("%d.%m.%Y %H:%M"), dense=True)
@@ -1349,12 +1359,13 @@ class EkOzellikler4:
                     (str(x.get("son_odeme") or "")[:10] == (f.get("son_odeme") or "") or (x.get("donem") and x.get("donem") == f.get("donem"))):
                 return None
         abone = None
-        for ab in self.ek.get("abonelikler", []):
+        benimkiler = [ab for ab in self.ek.get("abonelikler", []) if self.sahip_yetkili(ab)]
+        for ab in benimkiler:
             if abone_ayni(f.get("abone_no"), ab.get("abone_no")):
                 abone = ab
                 break
         if abone is None:
-            abone = next((ab for ab in self.ek.get("abonelikler", []) if ab.get("tur") == f["tur"] and not ab.get("abone_no")), None)
+            abone = next((ab for ab in benimkiler if ab.get("tur") == f["tur"] and not ab.get("abone_no")), None)
         gorsel = None
         if f.get("pdf"):
             try:
@@ -1392,8 +1403,7 @@ class EkOzellikler4:
         if not sonuc:
             return None  # başka cihaz eklemiş
         self.ek.setdefault("faturalar", []).insert(0, sonuc[0] if isinstance(sonuc[0], dict) else kayit)
-        if f.get("abone_no") and not any(abone_ayni(ab.get("abone_no"), f["abone_no"])
-                                         for ab in self.ek.get("abonelikler", [])):
+        if f.get("abone_no") and not any(abone_ayni(ab.get("abone_no"), f["abone_no"]) for ab in benimkiler):
             try:
                 gun = dt.date.fromisoformat(f["fatura_tarihi"]).day if f.get("fatura_tarihi") else mail["tarih"].day
                 yeni = {"tur": f["tur"], "kurum": f.get("kurum"), "abone_no": f["abone_no"], "beklenen_gun": gun,
@@ -1434,7 +1444,8 @@ class EkOzellikler4:
         for f in self.ek.get("faturalar", []):
             if abone_ayni(f.get("abone_no"), ab.get("abone_no")):
                 return f
-            if not ab.get("abone_no") and f.get("tur") == ab.get("tur"):
+            if not ab.get("abone_no") and f.get("tur") == ab.get("tur") and \
+                    f.get("kasa_sahibi") == ab.get("kasa_sahibi"):
                 return f
         return None
 
@@ -1475,11 +1486,12 @@ class EkOzellikler4:
                                     12, renk="#b45309"), renk=ui.UYARI_ZEMIN, dolgu=12))
         from hb_ek import FATURA_SIMGE, _ikon
         for ab in self.ek.get("abonelikler", []):
-            if not self.yonetici and ab.get("kasa_sahibi") != self.ben["id"]:
-                continue
+            yetkili = self.sahip_yetkili(ab)
             simge, renk = FATURA_SIMGE.get(ab["tur"], FATURA_SIMGE["Diğer"])
             f = self.abonelik_faturasi(ab)
-            alt = [x for x in [ab.get("kurum"), f"Abone no {ab['abone_no']}" if ab.get("abone_no") else None,
+            alt = [x for x in [self.ad(ab.get("kasa_sahibi")) if len(self.profiller) > 1 and
+                               (self.yonetici or self.sahip_etiketi(ab)) else None,
+                               ab.get("kurum"), f"Abone no {ab['abone_no']}" if ab.get("abone_no") else None,
                                f"Her ayın ~{ab['beklenen_gun']}'i" if ab.get("beklenen_gun") else None] if x]
             son = (f"Son fatura: {hb.tl(f['tutar'])}" + (f" • {f['donem']}" if f.get("donem") else "")
                    + (" • ödendi" if f.get("odendi") else " • ödenmedi")) if f else "Henüz fatura yok"
@@ -1492,16 +1504,19 @@ class EkOzellikler4:
                            yazi(son, 11.5, "sb", renk=ui.YAZI if f else ui.SOLUK)], spacing=1, expand=True),
                 ft.IconButton(icon=ft.Icons.TRAVEL_EXPLORE_ROUNDED, tooltip="Kurumdan şimdi sorgula", icon_color=ui.VURGU,
                               on_click=lambda e, ab=ab: self.page.run_task(self._tek_sorgu, ab))
-                if ab.get("baglanti") else ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.SOLUK)], spacing=10),
+                if ab.get("baglanti") and yetkili else
+                (ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.SOLUK) if yetkili else ft.Container(width=8))], spacing=10),
                 bgcolor=ui.KART, border_radius=18, padding=12, border=ui.kenar() if ui.KOYU else None,
                 shadow=None if ui.KOYU else golge(0.4), opacity=1 if ab.get("aktif", True) else 0.5,
-                on_click=lambda e, ab=ab: self.abonelik_duzenle(ab)))
+                on_click=(lambda e, ab=ab: self.abonelik_duzenle(ab)) if yetkili else None))
         if not self.ek.get("abonelikler"):
             ogeler.append(kart(yazi("Henüz abonelik yok. E-postadan fatura geldikçe kendiliğinden eklenir ya da elle ekleyin.",
                                     12.5, renk=ui.SOLUK)))
         return self._liste(ogeler)
 
     def abonelik_duzenle(self, ab=None):
+        if ab and self.salt_okunur(ab, "abonelik"):
+            return
         ab = ab or {}
         tur = acilir("Tür", self.fatura_turleri(), ab.get("tur") or "Elektrik")
         kurum = ft.TextField(label="Kurum (örn. Palen, ESKİ, Türk Telekom)", value=ab.get("kurum") or "", dense=True)
@@ -1897,6 +1912,7 @@ class EkOzellikler4:
         ab.update(son_sorgu=r["zaman"], son_borc=r["toplam"], son_bilgi=bilgi)
         # kurumda borç yoksa, uygulamada "ödenmedi" duran o aboneliğin faturaları ödenmiştir
         bekleyen = [f for f in self.ek.get("faturalar", []) if not f.get("odendi") and f.get("id")
+                    and f.get("kasa_sahibi") == ab.get("kasa_sahibi")
                     and (abone_ayni(f.get("abone_no"), ab.get("abone_no"))
                          or (not f.get("abone_no") and f.get("tur") == ab.get("tur")))]
         kapanan = 0
@@ -2118,7 +2134,7 @@ class EkOzellikler4:
                 kutu.controls = [ft.Row([ft.ProgressRing(width=20, height=20),
                                          yazi("Son 6 ayın alışverişleri inceleniyor…", 12, renk=ui.SOLUK)])]
                 return
-            islemler = [i for i in v if self.yonetici or i.get("kasa_sahibi") == self.ben["id"]]
+            islemler = v  # hanenin alışverişleri: Hatice de herkesin giderini görür (gelirler ona gelmez)
             urunler = ak.aliskanliklar(islemler)
             bas, bit = self.donem
             gecmis = [hb.butce_donemi(hb.simdi().date(), -n) for n in (1, 2, 3)]
@@ -2217,7 +2233,7 @@ class EkOzellikler4:
         async def yukle():
             bas = hb.simdi().date() - dt.timedelta(days=185)
             try:
-                durum["veri"] = await self.arka(self.supa.islemler, bas, hb.simdi().date())
+                durum["veri"] = self.gorunur(await self.arka(self.supa.islemler, bas, hb.simdi().date()))
             except Exception:
                 durum["veri"] = list(self.islemler)
             ciz()

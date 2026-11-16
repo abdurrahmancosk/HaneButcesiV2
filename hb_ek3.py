@@ -116,12 +116,12 @@ class EkOzellikler3:
         o = self._yerel_oku("onbellek")
         if not o:
             return False
-        self.islemler = o.get("islemler") or []
-        self.bakiyeler = o.get("bakiyeler") or []
         if not self.profiller:
             self.profiller = o.get("profiller") or {}
         if not self.ben:
             self.ben = o.get("ben")
+        self.islemler = self.gorunur(o.get("islemler") or [])
+        self.bakiyeler = o.get("bakiyeler") or []
         return True
 
     # ================================================================== tüm zamanlar
@@ -205,7 +205,7 @@ class EkOzellikler3:
             sorgu = (f"select=*&or=" + q(f"(kasa_sahibi.eq.{pid},hedef_kasa.eq.{pid})") +
                      "&order=tarih.desc,id.desc&limit=5000")
             try:
-                durum["veri"] = await self.arka(self.supa.tablo, "hb_islemler", sorgu)
+                durum["veri"] = self.gorunur(await self.arka(self.supa.tablo, "hb_islemler", sorgu))
             except Exception:
                 durum["veri"] = [i for i in self.islemler if pid in (i.get("kasa_sahibi"), i.get("hedef_kasa"))]
             ciz()
@@ -268,12 +268,17 @@ class EkOzellikler3:
                                             renk=GELIR if (kz or 0) >= 0 else GIDER)],
                                       horizontal_alignment=ft.CrossAxisAlignment.END, spacing=0)], spacing=10),
                     ft.Row([buton("Aldım", lambda e, t=tur: self.varlik_ekle(t, True), ft.Icons.ADD_ROUNDED, tip="text"),
-                            buton("Sattım", lambda e, t=tur, vs=vs: self.varlik_sat(t, vs, fiyat), ft.Icons.SELL_ROUNDED, tip="text"),
+                            *([buton("Sattım", lambda e, t=tur, vs=benim, f=fiyat: self.varlik_sat(t, vs, f),
+                                     ft.Icons.SELL_ROUNDED, tip="text")] if (benim := [v for v in vs if self.sahip_yetkili(v)])
+                              else []),
                             buton("Detay", lambda e, vs=vs: self.varlik_detay(vs), tip="text")],
                            alignment=ft.MainAxisAlignment.END, spacing=0)], spacing=4),
                     bgcolor=ui.KART, border_radius=18, padding=12, shadow=golge(0.5)))
             ust = ft.Container(content=ft.Column([
-                ft.Row([ft.Icon(ft.Icons.DIAMOND_ROUNDED, color="#fef3c7"), yazi("Altın & döviz varlığım", 13, renk="#fef3c7")]),
+                ft.Row([ft.Icon(ft.Icons.DIAMOND_ROUNDED, color="#fef3c7"),
+                        yazi("Hanenin altın & dövizi" if any(self.sahip_etiketi(v) for v in elde) or
+                             (self.yonetici and len({v.get("kasa_sahibi") for v in elde}) > 1)
+                             else "Altın & döviz varlığım", 13, renk="#fef3c7")]),
                 yazi(hb.tl(toplam_deger), 30, True, renk="white"),
                 yazi((("Kâr " if toplam_deger >= toplam_maliyet else "Zarar ") + hb.tl(abs(toplam_deger - toplam_maliyet))
                       + " • alış maliyeti " + hb.tl(toplam_maliyet)) if toplam_maliyet else "Güncel piyasa alış fiyatıyla",
@@ -413,14 +418,18 @@ class EkOzellikler3:
     def varlik_detay(self, vs):
         satirlar = [ft.Row([yazi(dt.date.fromisoformat(v["tarih"]).strftime("%d.%m.%Y"), 12, renk=ui.SOLUK, width=90),
                             yazi(f"{float(v['miktar']):g}", 13, True, width=50),
-                            yazi(hb.tl(v["birim_maliyet"]) if v.get("birim_maliyet") else "maliyet yok", 12, expand=True),
+                            yazi((hb.tl(v["birim_maliyet"]) if v.get("birim_maliyet") else "maliyet yok") +
+                                 (f" • {self.ad(v.get('kasa_sahibi'))}" if len(self.profiller) > 1 else ""), 12, expand=True),
                             ft.IconButton(icon=ft.Icons.DELETE_OUTLINE_ROUNDED, icon_size=18,
-                                          on_click=lambda e, v=v: self.page.run_task(self._varlik_sil, v))]) for v in vs]
+                                          on_click=lambda e, v=v: self.page.run_task(self._varlik_sil, v))
+                            if self.sahip_yetkili(v) else ft.Container(width=40)]) for v in vs]
         self.dialog_ac(ft.AlertDialog(title=yazi("Alış kayıtları", 16, True),
                                       content=ft.Column(satirlar, tight=True, scroll=ft.ScrollMode.AUTO),
                                       actions=[buton("Kapat", lambda e: self.dialog_kapat(), tip="text")]))
 
     async def _varlik_sil(self, v):
+        if self.salt_okunur(v, "varlık"):
+            return
         self.dialog_kapat()
         await self._islem(self.supa.tablo_sil, "hb_varliklar", v["id"], basari="Silindi (bağlı gider kaydı silinmedi)")
         await self.varliklari_yukle()
@@ -678,7 +687,7 @@ class EkOzellikler3:
         bugun = hb.simdi().date()
         gunluk, gun_kayit = {}, {}
         for i in self.donem_islemleri():
-            if i.get("tur") != "Gider" or (not self.yonetici and i.get("kasa_sahibi") != self.ben["id"]):
+            if i.get("tur") != "Gider":  # hanenin harcaması (Hatice de herkesin giderini görür)
                 continue
             g = hb.tarih_yerel(i.get("tarih")).date()
             gunluk[g] = gunluk.get(g, 0) + float(i.get("tutar") or 0)
@@ -737,7 +746,7 @@ class EkOzellikler3:
                 kutu.controls = [ft.Row([ft.ProgressRing(width=20, height=20), yazi(f"{y} verileri yükleniyor…", 12, renk=ui.SOLUK)])]
                 return
             giderler = [i for i in v if i["tur"] == "Gider"]
-            oz = hb.donem_ozeti(v, None if self.yonetici else self.ben["id"])
+            oz = hb.donem_ozeti(v, None)  # hanenin harcaması; gelir / net yalnızca yöneticiye gösterilir
             if not v:
                 kutu.controls = [kart(yazi(f"{y} yılına ait kayıt yok.", 13, renk=ui.SOLUK))]
                 return
@@ -759,7 +768,7 @@ class EkOzellikler3:
             en_pahali = max(fisler.values(), key=lambda f: f["t"]) if fisler else None
             ay_dolu = [(n, a) for n, a in enumerate(aylik) if a]
             tasarruflu = min(ay_dolu, key=lambda x: x[1]) if ay_dolu else None
-            kisiler = {pid: hb.donem_ozeti(v, pid)["gider"] for pid in self.profiller} if self.yonetici else {}
+            kisiler = {pid: hb.donem_ozeti(v, pid)["gider"] for pid in self.profiller}
 
             def hikaye(renkler, simge, baslik, buyuk, alt):
                 return ft.Container(content=ft.Column([
@@ -769,7 +778,8 @@ class EkOzellikler3:
 
             kartlar = [
                 hikaye(["#0f766e", "#14b8a6"], ft.Icons.CELEBRATION_ROUNDED, f"{y} yılında toplam harcama", hb.tl(oz["gider"]),
-                       f"Gelir {hb.tl(oz['gelir'])} • Net {hb.tl(oz['net'], isaret=True)}"),
+                       f"Gelir {hb.tl(oz['gelir'])} • Net {hb.tl(oz['net'], isaret=True)}" if self.yonetici else
+                       f"Hanenin harcaması • benim payım {hb.tl(kisiler.get(self.ben['id'], 0))}"),
                 kart(ft.Column([yazi("Ay ay harcama", 15, True),
                                 ft.Row([ft.Column([yazi(f"{a / 1000:.0f}b" if a >= 1000 else (f"{a:.0f}" if a else ""), 9, renk=ui.SOLUK),
                                                    ft.Container(height=max(4, 110 * a / enb), bgcolor="#14b8a6" if a != enb else GIDER,
@@ -806,7 +816,7 @@ class EkOzellikler3:
 
         async def yukle():
             try:
-                durum["veri"] = await self.arka(self.supa.islemler, dt.date(y, 1, 1), dt.date(y, 12, 31))
+                durum["veri"] = self.gorunur(await self.arka(self.supa.islemler, dt.date(y, 1, 1), dt.date(y, 12, 31)))
             except Exception:
                 durum["veri"] = []
             ciz()
@@ -1279,7 +1289,9 @@ class EkOzellikler3:
             acil = so is not None and so <= bugun
             satir = ft.Row([yazi(f"{ui.AYLAR_UZUN[so.month - 1]} {so.year}" if so else (f.get("donem") or "Ekstre"), 12.5, "sb",
                                  renk=GIDER if acil else None, expand=True),
-                            yazi(("tahmini • " if ekstre_tahmini_mi(f) else "") +
+                            yazi((f"{self.ad(f.get('kasa_sahibi'))} • " if len(self.profiller) > 1
+                                  and f.get("kasa_sahibi") != self.ben["id"] else "") +
+                                 ("tahmini • " if ekstre_tahmini_mi(f) else "") +
                                  (f"son gün {so.day:02d}.{so.month:02d}" if so else ""), 11.5,
                                  renk=GIDER if acil else ui.SOLUK),
                             yazi(hb.tl(f.get("tutar") or 0), 12.5, "xb", renk=GIDER if acil else None)], spacing=8)
