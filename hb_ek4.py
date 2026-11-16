@@ -2362,6 +2362,7 @@ class EkOzellikler4:
             a = self.ek_ders_ayari()
             y, m = self._ek_ders_ay(durum["ofset"])
             r = ak.ek_ders_tahmini(a, y, m, self.ek.get("tatiller") or None)
+            pu = r.get("puantaj")
             zincir = next((x for x in self.maas_tahminleri(4) if x["tur"] == "ekders"
                            and (x["ait_yil"], x["ait_ay"]) == (y, m)), None)
             if zincir:  # bordro girildiyse: yılbaşından beri biriken matrah ve aylık istisna ile gerçek vergi
@@ -2388,7 +2389,10 @@ class EkOzellikler4:
                 ciz()
                 self.guncelle()
 
-            detay = (f"{r['okul_gunu']} okul günü (haftada {sa(r['haftalik'])} saat) = {sa(r['saat_ders'])} sa"
+            detay = (f"Puantaj {r['bas']:%d.%m}–{r['bit']:%d.%m}: ders + nöbet + yer.geç. {sa(r['saat_ders'])} sa"
+                     + (f" • belleticilik {sa(r['saat_pansiyon'])} sa" if r["saat_pansiyon"] else "")
+                     + (f" • diğer {sa(r['saat_diger'])} sa" if r["saat_diger"] else "")) if pu else (
+                     f"{r['okul_gunu']} okul günü (haftada {sa(r['haftalik'])} saat) = {sa(r['saat_ders'])} sa"
                      + (f" • ara tatil {r['ara_tatil_gunu']} gün = {sa(r['saat_ara'])} sa" if r["ara_tatil_gunu"] else "")
                      + (f" • pansiyon {r['pansiyon']} × {sa(a['pansiyon_saat'])} = {sa(r['saat_pansiyon'])} sa" if r["pansiyon"] else "")
                      + (f" • diğer {sa(r['saat_diger'])} sa" if r["saat_diger"] else ""))
@@ -2410,23 +2414,36 @@ class EkOzellikler4:
                         ft.Column([yazi("Tahmini ek ders", 15, True),
                                    yazi(f"{ay_adi} • {aralik}", 11.5, renk=ui.SOLUK),
                                    yazi(f"{odeme} arası yatar", 11.5, renk=ui.SOLUK)], spacing=0, expand=True),
+                        ft.IconButton(icon=ft.Icons.UPLOAD_FILE_ROUNDED, icon_size=20, icon_color=GELIR,
+                                      tooltip="Ek ders puantajı yükle (PDF / resim)",
+                                      on_click=lambda e: self.page.run_task(self.puantaj_yukle)),
                         ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_size=20, tooltip="Ek ders ayarları",
                                       on_click=lambda e: self.ek_ders_ayar_dialog(lambda: (ciz(), self.guncelle())))],
-                       spacing=10),
+                       spacing=0),
                 ft.Row([ft.IconButton(icon=ft.Icons.CHEVRON_LEFT_ROUNDED, icon_size=20, on_click=lambda e: ay_degis(-1)),
                         ft.Column([yazi(hb.tl(r["net"]), 24, "xb", renk=GELIR),
                                    yazi(f"{sa(r['saat'])} saat • brüt {hb.tl(r['brut'])}", 11.5, renk=ui.SOLUK)],
                                   spacing=0, expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                         ft.IconButton(icon=ft.Icons.CHEVRON_RIGHT_ROUNDED, icon_size=20, on_click=lambda e: ay_degis(1))]),
-                ft.Container(content=ft.Row([
+                (ft.Container(content=ft.Row([
+                    ft.Icon(ft.Icons.FACT_CHECK_ROUNDED, size=18, color=GELIR),
+                    yazi(f"Puantajdan: gündüz {sa(pu['toplam'].get('gunduz', 0))} • nöbet {sa(pu['toplam'].get('nobet', 0))}"
+                         f" • yer.geç. {sa(pu['toplam'].get('yer_gec', 0))} • belleticilik "
+                         f"{sa(pu['toplam'].get('belleticilik', 0))}"
+                         + (f" • diğer {sa(pu['toplam']['diger'])}" if pu['toplam'].get('diger') else "") + " saat",
+                         12, "sb", expand=True)], spacing=6),
+                    bgcolor=saydam(GELIR, "14"), border_radius=12, padding=ft.Padding(10, 8, 10, 8))
+                 if pu else ft.Container(content=ft.Row([
                     yazi("Pansiyon nöbeti", 13, "sb", expand=True),
                     ft.IconButton(icon=ft.Icons.REMOVE_CIRCLE_OUTLINE_ROUNDED, icon_size=24, on_click=lambda e: nobet(-1)),
                     yazi(str(r["pansiyon"]), 18, "xb"),
                     ft.IconButton(icon=ft.Icons.ADD_CIRCLE_OUTLINE_ROUNDED, icon_size=24, icon_color=GELIR,
                                   on_click=lambda e: nobet(1))], spacing=2),
-                    bgcolor=saydam(GELIR, "14"), border_radius=12, padding=ft.Padding(10, 0, 4, 0)),
-                yazi(f"Her nöbet ≈ +{hb.tl(r['pansiyon_net'])} (net) • ayda en fazla {ak.EK_DERS_PANSIYON_EN_FAZLA}", 11.5,
-                     renk=ui.SOLUK),
+                    bgcolor=saydam(GELIR, "14"), border_radius=12, padding=ft.Padding(10, 0, 4, 0))),
+                yazi(f"{r['pansiyon']} pansiyon nöbeti • puantaj yüklendi; saatler kesin, tutar bordroya göre"
+                     if pu else
+                     f"Her nöbet ≈ +{hb.tl(r['pansiyon_net'])} (net) • ayda en fazla {ak.EK_DERS_PANSIYON_EN_FAZLA} • "
+                     "puantajı yükleyince kesinleşir", 11.5, renk=ui.SOLUK),
                 *karsilastir,
             ]
             if not kompakt:
@@ -2556,6 +2573,8 @@ class EkOzellikler4:
                                  on_click=lambda e: self.maas_bordro_dialog())
         yukle_btn = buton("Bordro PDF'i yükle", lambda e: self.page.run_task(self.bordro_yukle),
                           ft.Icons.UPLOAD_FILE_ROUNDED, tip="tonal")
+        yukle_simge = ft.IconButton(icon=ft.Icons.UPLOAD_FILE_ROUNDED, icon_size=20, tooltip="Bordro PDF'i yükle",
+                                    icon_color=GELIR, on_click=lambda e: self.page.run_task(self.bordro_yukle))
         if not z:
             return kart(ft.Column([
                 ft.Row([simge_kutusu(ft.Icons.PAYMENTS_ROUNDED, GELIR, 18, 36), yazi("Tahmini maaş", 15, True, expand=True),
@@ -2574,7 +2593,7 @@ class EkOzellikler4:
             ft.Row([simge_kutusu(ft.Icons.PAYMENTS_ROUNDED, GELIR, 18, 36),
                     ft.Column([yazi("Tahmini maaş", 15, True),
                                yazi(f"{ay_adi} • {hedef['odeme'].day} {self._ayda(hedef['odeme'].month)} yatar",
-                                    11.5, renk=ui.SOLUK)], spacing=0, expand=True), ayar_btn], spacing=10),
+                                    11.5, renk=ui.SOLUK)], spacing=0, expand=True), yukle_simge, ayar_btn], spacing=0),
             ft.Column([yazi(hb.tl(hedef["net"]), 24, "xb", renk=GELIR),
                        yazi(f"gelir vergisi {hb.tl(hedef['gv'])} (%{hedef['dilim']} dilim) • damga {hb.tl(hedef['dv'])}",
                             11.5, renk=ui.SOLUK)], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
@@ -2596,6 +2615,8 @@ class EkOzellikler4:
                                  "kuruşu kuruşuna tuttu.", 10.5, renk=ui.SOLUK))
             satirlar.append(ft.Row([yukle_btn, buton("Yattı – gelir ekle", lambda e: self._maas_gelir_ekle(hedef),
                                                      ft.Icons.ADD_ROUNDED, tip="tonal")], wrap=True, spacing=8))
+        else:
+            satirlar.append(yukle_btn)
         return kart(ft.Column(satirlar, spacing=8), shadow=golge(0.5))
 
     def _maas_gelir_ekle(self, h):
@@ -2674,4 +2695,53 @@ class EkOzellikler4:
         self.bildir(f"✓ {ui.AYLAR_UZUN[m - 1]} {y} bordrosu okundu • net {hb.tl(b['net'])}"
                     + (f" (+{b['fark_bordro']} fark bordrosu)" if b.get("fark_bordro") else "")
                     + " • sonraki maaş hesaplandı", GELIR)
+        self.ekrani_ciz()
+
+    # ------------------------------------------------------------------ puantaj yükleme
+    async def puantaj_yukle(self, e=None):
+        veri = await self.dosya_sec("belge")
+        if veri:
+            await self.puantaj_isle(veri)
+
+    async def puantaj_isle(self, veri: bytes):
+        """Ek ders puantaj takvimini (PDF / fotoğraf) okur: ayı, hafta aralığını ve saatleri kaydeder; haftalık programı
+        ve pansiyon nöbeti sayısını puantajdan öğrenir."""
+        p = None
+        if veri[:4] == b"%PDF":  # yazı katmanlı PDF telefonda okunur, Gemini'ye gitmez
+            p = ak.puantaj_metinden(await self.arka(ak.pdf_metni, veri))
+        if p is None:
+            if not self.gemini_anahtari:
+                self.bildir("Puantaj fotoğrafını okumak için Menü › Ayarlar'dan Gemini anahtarı gerekli", GIDER)
+                return
+            if veri[:4] == b"%PDF":
+                hazir, mime = veri, "application/pdf"
+            else:
+                hazir, mime = await self.arka(hb.gorseli_hazirla, veri)
+            self.bildir("📋 Puantaj okunuyor…")
+            try:
+                p = await self.arka(ak.puantaj_analiz_et, hazir, mime, self.gemini_anahtari)
+            except Exception as ex:
+                self.bildir(f"Puantaj okunamadı: {ex}", GIDER)
+                return
+        a = self.ek_ders_ayari()
+        pu = dict(a.get("puantajlar") or {})
+        pu[p["ay"]] = {k: p[k] for k in ("bas", "bit", "toplam", "toplam_saat")}
+        a["puantajlar"] = pu
+        bellet = float(p["toplam"].get("belleticilik") or 0)
+        nb = dict(a.get("nobetler") or {})
+        nb[p["ay"]] = int(round(bellet / max(float(a.get("pansiyon_saat") or 8), 1)))
+        a["nobetler"] = nb
+        yeni_prog = ak.puantajdan_program(p) if p.get("gunler") else {}
+        eski_prog = {**ak.EK_DERS_VARSAYILAN["program"], **(a.get("program") or {})}
+        degisti = bool(yeni_prog) and any(float(yeni_prog[g]) != float(eski_prog.get(g, 0)) for g in yeni_prog) and sum(
+            float(v) for v in yeni_prog.values()) > 0
+        if degisti:
+            a["program"] = yeni_prog
+        self._ek_ders_kaydet(a)
+        y, m = (int(x) for x in p["ay"].split("-"))
+        bas, bit = dt.date.fromisoformat(p["bas"]), dt.date.fromisoformat(p["bit"])
+        self.bildir(f"✓ {ui.AYLAR_UZUN[m - 1]} {y} puantajı ({bas:%d.%m}–{bit:%d.%m}): "
+                    f"{str(p['toplam_saat']).replace('.0', '')} saat"
+                    + ("" if p["tutarli"] else " ⚠ gün toplamı özetle tutmadı, özet esas alındı")
+                    + (" • haftalık program güncellendi" if degisti else ""), GELIR)
         self.ekrani_ciz()

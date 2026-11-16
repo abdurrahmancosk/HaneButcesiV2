@@ -1661,6 +1661,16 @@ def ek_ders_tahmini(ayar: dict | None, yil: int, ay: int, tatiller=None, pansiyo
     saat_pansiyon = float(pansiyon) * float(a["pansiyon_saat"])
     saat_diger = float(a.get("diger_saat") or 0)
     saat = round(saat_ders + saat_ara + saat_pansiyon + saat_diger, 1)
+    pu = (a.get("puantajlar") or {}).get(f"{yil}-{ay:02d}")
+    if pu:  # o ayın puantajı yüklendiyse tahmin değil, puantajdaki saatler
+        t = pu.get("toplam") or {}
+        bas, bit = dt.date.fromisoformat(pu["bas"]), dt.date.fromisoformat(pu["bit"])
+        saat_pansiyon = float(t.get("belleticilik") or 0)
+        pansiyon = int(round(saat_pansiyon / max(float(a["pansiyon_saat"]), 1)))
+        saat_diger = float(t.get("diger") or 0)
+        saat_ders = float(t.get("gunduz") or 0) + float(t.get("nobet") or 0) + float(t.get("yer_gec") or 0)
+        saat_ara = 0.0
+        saat = round(float(pu.get("toplam_saat") or (saat_ders + saat_pansiyon + saat_diger)), 1)
     brut_saat = float(a["brut"] or ek_ders_brut(yil, ay))
     gv_or, dv_or = float(a["gv_orani"]) / 100, float(a["dv_orani"]) / 100
     gv_ist, dv_ist = float(a.get("gv_istisna") or 0), float(a.get("dv_istisna") or 0)
@@ -1678,7 +1688,7 @@ def ek_ders_tahmini(ayar: dict | None, yil: int, ay: int, tatiller=None, pansiyo
     return {"yil": yil, "ay": ay, "bas": bas, "bit": bit, "hafta": ((bit - bas).days + 1) // 7,
             "okul_gunu": okul, "ara_tatil_gunu": ara, "haftalik": sum(program.values()),
             "saat_ders": round(saat_ders, 1), "saat_ara": saat_ara, "pansiyon": pansiyon, "saat_pansiyon": saat_pansiyon,
-            "saat_diger": saat_diger, "saat": saat, "brut_saat": brut_saat, "brut": brut, "gv": gv, "dv": dv, "net": net,
+            "saat_diger": saat_diger, "saat": saat, "puantaj": pu, "brut_saat": brut_saat, "brut": brut, "gv": gv, "dv": dv, "net": net,
             "pansiyon_net": round(tek, 2),
             "odeme_bas": dt.date(oy, oa, int(a["odeme_bas"])), "odeme_bit": dt.date(oy, oa, int(a["odeme_bit"]))}
 
@@ -1850,3 +1860,102 @@ def bordro_sec(bordrolar: list[dict]) -> dict | None:
     asil["kumulatif"] = round(kum, 2)
     asil["fark_bordro"] = len(ayni) - 1
     return asil
+
+
+# ---------------------------------------------------------------- ek ders puantaj takvimi (PDF / resim)
+PUANTAJ_TURLERI = ("gunduz", "nobet", "yer_gec", "belleticilik", "diger")
+
+
+def puantaj_mu(metin: str) -> bool:
+    return "PUANTAJ" in (metin or "").upper() and "EK DERS" in (metin or "").upper()
+
+
+def puantaj_analiz_et(veri: bytes, mime: str, api_anahtari: str) -> dict:
+    """Okul Bilgi Sistemleri / MEBBİS 'Kişisel Ek Ders Puantajı' belgesini okur (Gemini; PDF ya da fotoğraf).
+    Kimlik bilgileri istenmez; yalnızca günler ve saatler."""
+    istem = """Bu, Okul Bilgi Sistemleri'nin 'Kişisel Ek Ders Puantajı (Kontrol Amaçlı)' belgesi: başlıkta
+'<AY> <YIL> - EK DERS PUANTAJ TAKVİMİ', altında Pzt–Paz sütunlu bir takvim, en altta 'TOPLAM ÖZETLERİ' ve 'TOPLAM SAAT'.
+Kişisel bilgileri (ad soyad, T.C. kimlik, telefon, kurum) YAZMA. YALNIZCA JSON döndür:
+{"ay": "YYYY-MM (başlıktaki ay ve yıl)",
+ "gunler": [{"tarih": "YYYY-MM-DD", "gunduz": 3, "nobet": 3, "yer_gec": 2, "belleticilik": 0, "diger": 0}],
+ "toplamlar": {"gunduz": 45, "nobet": 15, "yer_gec": 20, "belleticilik": 48, "diger": 0},
+ "toplam_saat": 128}
+Kalem eşlemesi: 'Gündüz' → gunduz; 'Nöbet Görevi(Gündüz)' → nobet; 'Ek Ders Yer.Geç.Gör.(Gündüz)' → yer_gec;
+'Belleticilik' → belleticilik; diğer her kalem (Gece, DYK, Kurs, Sınav, Hizmetiçi…) → diger.
+Hücrelerde yıl yazmaz ('28 Eylül', '1 Kasım'): yılı başlıktan al; başlık Aralık ise 'Ocak' günleri sonraki yıl,
+başlık Ocak ise 'Aralık' günleri önceki yıldır. Takvimde önceki / sonraki aydan günler de vardır (hafta bütünlüğü):
+onları da kendi tarihleriyle yaz. '-' olan boş günleri yazma. toplamlar ve toplam_saat 'TOPLAM ÖZETLERİ' / 'TOPLAM SAAT'
+bölümünden alınsın. Sayılar sayı olsun ('3 Saat' → 3)."""
+    j = gemini(istem, api_anahtari, veri, mime)
+    return puantaj_coz(j)
+
+
+def puantaj_coz(j: dict) -> dict:
+    gunler = {}
+    for g in j.get("gunler") or []:
+        try:
+            d = dt.date.fromisoformat(str(g.get("tarih"))[:10])
+        except Exception:
+            continue
+        gunler[d.isoformat()] = {k: float(hb.tutar_coz(g.get(k)) or 0) for k in PUANTAJ_TURLERI}
+    if not gunler:
+        raise ValueError("Puantajda gün bulunamadı")
+    gun_top = {k: round(sum(v[k] for v in gunler.values()), 1) for k in PUANTAJ_TURLERI}
+    belge_top = {k: float(hb.tutar_coz((j.get("toplamlar") or {}).get(k)) or 0) for k in PUANTAJ_TURLERI}
+    toplam = belge_top if sum(belge_top.values()) > 0 else gun_top
+    toplam_saat = float(hb.tutar_coz(j.get("toplam_saat")) or 0) or round(sum(toplam.values()), 1)
+    bas, bit = min(gunler), max(gunler)
+    ay = str(j.get("ay") or "")[:7]
+    if not re.match(r"^\d{4}-\d{2}$", ay):  # perşembe kuralıyla: ortadaki günün ayı
+        orta = dt.date.fromisoformat(bas) + (dt.date.fromisoformat(bit) - dt.date.fromisoformat(bas)) / 2
+        ay = f"{orta.year}-{orta.month:02d}"
+    y, m = (int(x) for x in ay.split("-"))
+    hb_bas, hb_bit = ek_ders_haftalari(y, m)   # tablo ilk/son boş günleri göstermese de hafta bütünlüğü aralığı
+    return {"ay": ay, "bas": min(bas, hb_bas.isoformat()), "bit": max(bit, hb_bit.isoformat()), "gunler": gunler,
+            "toplam": toplam, "toplam_saat": toplam_saat, "gun_toplami": gun_top,
+            "tutarli": abs(sum(gun_top.values()) - toplam_saat) < 0.6}
+
+
+def puantajdan_program(p: dict) -> dict:
+    """Puantajdan haftalık program: her hafta içi gün için en sık görülen (gündüz + nöbet + yer.geç.) saat."""
+    from collections import Counter
+    sayac = {g: Counter() for g in range(5)}
+    for iso, v in p["gunler"].items():
+        d = dt.date.fromisoformat(iso)
+        if d.weekday() < 5:
+            sayac[d.weekday()][v["gunduz"] + v["nobet"] + v["yer_gec"]] += 1
+    prog = {}
+    for g in range(5):
+        prog[str(g)] = (sayac[g].most_common(1)[0][0] if sayac[g] else 0)
+        prog[str(g)] = int(prog[str(g)]) if float(prog[str(g)]).is_integer() else prog[str(g)]
+    return prog
+
+
+_AY_ADLARI = ["OCAK", "ŞUBAT", "MART", "NİSAN", "MAYIS", "HAZİRAN", "TEMMUZ", "AĞUSTOS", "EYLÜL", "EKİM", "KASIM", "ARALIK"]
+
+
+def puantaj_metinden(metin: str) -> dict | None:
+    """Yazı katmanlı puantaj PDF'i telefonda okunur (Gemini'ye gitmez): başlıktaki ay + 'TOPLAM ÖZETLERİ'.
+    Gün gün saatler alınmaz (haftalık program öğrenilmez); hafta aralığı hafta bütünlüğünden hesaplanır."""
+    if not puantaj_mu(metin):
+        return None
+    ust = metin.upper().replace("İ", "İ")
+    m = re.search(r"(" + "|".join(_AY_ADLARI) + r")\s+(\d{4})\s*-\s*EK DERS PUANTAJ", ust)
+    if not m:
+        return None
+    ay = f"{m.group(2)}-{_AY_ADLARI.index(m.group(1)) + 1:02d}"
+    ozet = metin[metin.upper().find("TOPLAM ÖZET"):] if "TOPLAM ÖZET" in metin.upper() else metin
+
+    def saat(desen):
+        x = re.search(desen + r"[^\d]{0,40}?(\d+(?:[.,]\d+)?)\s*Saat", ozet, re.I)
+        return float(x.group(1).replace(",", ".")) if x else 0.0
+    toplam = {"nobet": saat(r"Nöbet Görevi\s*\(Gündüz\)"), "yer_gec": saat(r"Ek Ders Yer\.?\s*Geç\.?\s*Gör\.?\s*\(Gündüz\)"),
+              "belleticilik": saat(r"Belleticilik"), "gunduz": saat(r"(?<![(\w])Gündüz(?!\))"), "diger": 0.0}
+    toplam_saat = saat(r"TOPLAM SAAT")
+    if not toplam_saat:
+        return None
+    toplam["diger"] = round(max(toplam_saat - sum(toplam.values()), 0), 1)
+    y, a = (int(x) for x in ay.split("-"))
+    bas, bit = ek_ders_haftalari(y, a)
+    return {"ay": ay, "bas": bas.isoformat(), "bit": bit.isoformat(), "gunler": {}, "toplam": toplam,
+            "toplam_saat": toplam_saat, "gun_toplami": {}, "tutarli": True}

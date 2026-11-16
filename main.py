@@ -1723,6 +1723,11 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         if tip == "pdf":
             sifreli = await self.arka(ak.pdf_sifreli_mi, veri)
             metin = "" if sifreli else await self.arka(ak.pdf_metni, veri)
+            if ak.puantaj_mu(metin) and self.yonetici:
+                self.fis = None
+                self.sekmeye_git(0)
+                await self.puantaj_isle(veri)
+                return
             if ak.bordro_mu(metin):
                 self.fis = None
                 if self.yonetici:

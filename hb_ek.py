@@ -725,6 +725,9 @@ class EkOzellikler:
             if ak.bordro_mu(metin):
                 await self.bordrolari_isle([veri])
                 return
+            if ak.puantaj_mu(metin):
+                await self.puantaj_isle(veri)
+                return
         if tip == "pdf":
             sifreli = await self.arka(ak.pdf_sifreli_mi, veri)
             if sifreli or ak.ekstre_mi(await self.arka(ak.pdf_metni, veri)):
@@ -1461,7 +1464,12 @@ class EkOzellikler:
             self.bildir("Dosya seçici kullanılamıyor.", GIDER)
             return None
         kw = dict(allow_multiple=bool(coklu))
-        kw.update(file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=["pdf"]) if tip == "pdf" else \
+        if tip == "pdf":
+            kw.update(file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=["pdf"])
+        elif tip == "belge":
+            kw.update(file_type=ft.FilePickerFileType.CUSTOM,
+                      allowed_extensions=["pdf", "jpg", "jpeg", "png", "webp", "heic"])
+        else:
             kw.update(file_type=ft.FilePickerFileType.IMAGE)
         try:
             try:
