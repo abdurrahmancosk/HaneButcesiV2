@@ -20,7 +20,8 @@ from hb_ui import (ANA, AKTARIM, GELIR, GIDER, acilir, buton, cip, degrade, golg
 
 FATURA_SIMGE = {"Elektrik": ("BOLT", "#f59e0b"), "Su": ("WATER_DROP", "#0ea5e9"), "Doğalgaz": ("LOCAL_FIRE_DEPARTMENT", "#f97316"),
                 "İnternet": ("WIFI", "#6366f1"), "Telefon": ("PHONE_ANDROID", "#14b8a6"), "Aidat": ("APARTMENT", "#8b5cf6"),
-                "Kira": ("HOME", "#0f766e"), "Diğer": ("RECEIPT_LONG", "#64748b")}
+                "Kira": ("HOME", "#0f766e"), "Kredi kartı": ("CREDIT_CARD", "#4f46e5"), "Sigorta": ("SHIELD", "#0891b2"),
+                "Diğer": ("RECEIPT_LONG", "#64748b")}
 
 MENU = [  # anahtar, başlık, açıklama, simge, renk
     ("bildirimler", "Bildirimler", "Eşinizin eklediği kayıtlar, hatırlatmalar", "NOTIFICATIONS_ROUNDED", "#e11d48"),
@@ -565,6 +566,13 @@ class EkOzellikler:
         if f.get("gorsel"):
             eylem.append(buton("Görsel", gorsel, ft.Icons.IMAGE_ROUNDED, tip="text"))
         eylem.append(buton("Sil", sil, ft.Icons.DELETE_ROUNDED, tip="text"))
+
+        def duzenle(e):
+            self.dialog_kapat(d)
+            self.fatura_onay(dict(f, son_odeme=str(f.get("son_odeme"))[:10] if f.get("son_odeme") else None),
+                             f.get("gorsel"), mevcut=f)
+
+        eylem.append(buton("Düzenle", duzenle, ft.Icons.EDIT_ROUNDED, tip="text"))
         if not f.get("odendi"):
             eylem.append(buton("Ödendi", ode, ft.Icons.CHECK_ROUNDED))
         else:
@@ -579,7 +587,7 @@ class EkOzellikler:
             sahip = kasa.value if self.yonetici else self.ben["id"]
             kayit = {"tur": "Gider", "tutar": float(f["tutar"]), "tarih": hb.iso_tarih(hb.simdi()),
                      "firma": f.get("kurum"), "urun": f"{f['tur']} Faturası" + (f" ({f['donem']})" if f.get("donem") else ""),
-                     "kategori": "Kira & Aidat & Faturalar", "kasa_sahibi": sahip, "hedef_kasa": None,
+                     "kategori": f.get("kategori") or "Kira & Aidat & Faturalar", "kasa_sahibi": sahip, "hedef_kasa": None,
                      "fis_gorsel": f.get("gorsel"), "aciklama": "Fatura ödemesi"}
             try:
                 eklenen = await self.arka(self.supa.islem_ekle, [kayit])
@@ -597,15 +605,27 @@ class EkOzellikler:
         if dosya:
             await self.fatura_isle(dosya, tip)
 
+    def fatura_turleri(self):
+        ozel = [t for t in (getattr(self, "ozel_fatura_turleri", None) or []) if t not in ak.FATURA_TURLERI]
+        return ak.FATURA_TURLERI[:-1] + ozel + ["Diğer"]
+
     async def fatura_isle(self, veri, tip):
-        self.bildir("Fatura okunuyor… (5-20 sn)")
+        if tip == "pdf":
+            sifreli = await self.arka(ak.pdf_sifreli_mi, veri)
+            if sifreli or ak.ekstre_mi(await self.arka(ak.pdf_metni, veri)):
+                self.bildir("💳 Bu bir kredi kartı ekstresi: taksitler Taksitler bölümüne eklenecek")
+                self.planla_ac("taksitler")
+                await self.ekstre_isle(veri, "pdf")
+                return
+        self.bildir("Fatura okunuyor…")
         if tip == "pdf":
             hazir, mime, uzanti = veri, "application/pdf", "pdf"
         else:
             hazir, mime = await self.arka(hb.gorseli_hazirla, veri)
             uzanti = "jpg"
         yol, sonuc = await asyncio.gather(self.arka(self.supa.fis_yukle, hazir, uzanti, mime),
-                                          self.arka(ak.fatura_analiz_et, hazir, mime, self.gemini_anahtari),
+                                          self.arka(ak.fatura_analiz_et, hazir, mime, self.gemini_anahtari,
+                                                    self.fatura_turleri()),
                                           return_exceptions=True)
         if isinstance(yol, Exception):
             yol = None
@@ -614,8 +634,38 @@ class EkOzellikler:
             sonuc = {"tur": "Elektrik", "tutar": 0}
         self.fatura_onay(sonuc, yol)
 
-    def fatura_onay(self, f, gorsel):
-        tur = acilir("Fatura türü", ak.FATURA_TURLERI, f.get("tur") or "Diğer")
+    def fatura_onay(self, f, gorsel, mevcut=None):
+        turler = self.fatura_turleri()
+        if f.get("tur") and f["tur"] not in turler:
+            turler = turler[:-1] + [f["tur"], "Diğer"]
+        tur = acilir("Fatura türü", turler, f.get("tur") or "Diğer", expand=True)
+        yeni_tur = ft.TextField(label="Yeni tür adı (örn. Okul servisi, Kasko)", dense=True, visible=False)
+        varsayilan_kat = {"Kredi kartı": "Kredi Kartı, Kredi Ödemesi & Borç", "Sigorta": "Vergi, Harç & Resmi İşlemler"}
+        kategori = acilir("Ödenince harcama kategorisi", self.kategoriler,
+                          f.get("kategori") or varsayilan_kat.get(f.get("tur"), "Kira & Aidat & Faturalar")
+                          if (f.get("kategori") or varsayilan_kat.get(f.get("tur"), "Kira & Aidat & Faturalar")) in self.kategoriler
+                          else "Diğer")
+        kart_uyari = kart(ft.Column([
+            yazi("Kredi kartı ekstresinde taksitler varsa onları Taksitler bölümünde takip edin; ekstreyi ayrıca fatura olarak "
+                 "öderseniz harcama iki kez sayılır.", 11.5, renk="#b45309"),
+            buton("Taksitleri ekstreden çıkar", lambda e: (self.dialog_kapat(), self.planla_ac("taksitler"),
+                                                             self.ekstre_yukle()), ft.Icons.CREDIT_CARD_ROUNDED, tip="text")],
+            spacing=4), renk=ui.UYARI_ZEMIN, dolgu=10, visible=f.get("tur") == "Kredi kartı")
+
+        def tur_degisti(e):
+            kart_uyari.visible = tur.value == "Kredi kartı"
+            if tur.value in varsayilan_kat and varsayilan_kat[tur.value] in self.kategoriler:
+                kategori.value = varsayilan_kat[tur.value]
+            self.guncelle()
+
+        tur.on_change = tur_degisti
+
+        def yeni_tur_ac(e):
+            yeni_tur.visible = not yeni_tur.visible
+            self.guncelle()
+
+        tur_satiri = ft.Row([tur, ft.IconButton(icon=ft.Icons.ADD_CIRCLE_OUTLINE_ROUNDED, tooltip="Yeni fatura türü ekle",
+                                                on_click=yeni_tur_ac)], spacing=4)
         kurum = ft.TextField(label="Kurum", value=f.get("kurum") or "", dense=True)
         donem = ft.TextField(label="Dönem", value=f.get("donem") or "", dense=True)
         tutar = ft.TextField(label="Tutar (₺)", value=f"{f.get('tutar') or 0:.2f}".replace(".", ","), dense=True,
@@ -632,24 +682,60 @@ class EkOzellikler:
             if t is None:
                 self.bildir("Tutar gerekli.", GIDER)
                 return False
-            kayit = {"tur": tur.value, "kurum": kurum.value.strip() or None, "abone_no": f.get("abone_no"),
-                     "donem": donem.value.strip() or None, "fatura_tarihi": f.get("fatura_tarihi"),
+            secilen_tur = (yeni_tur.value or "").strip()[:30] if yeni_tur.visible and (yeni_tur.value or "").strip() else tur.value
+            if secilen_tur not in self.fatura_turleri():
+                await self.ozel_fatura_turu_ekle(secilen_tur)
+            kayit = {"tur": secilen_tur, "kurum": (kurum.value or "").strip() or None, "abone_no": f.get("abone_no"),
+                     "donem": (donem.value or "").strip() or None, "fatura_tarihi": f.get("fatura_tarihi"),
                      "son_odeme": hb.tarih_coz(so.value).date().isoformat() if (so.value or "").strip() else None,
-                     "tuketim": hb.tutar_coz(tuketim.value), "birim": birim.value.strip() or None,
+                     "tuketim": hb.tutar_coz(tuketim.value), "birim": (birim.value or "").strip() or None,
                      "birim_fiyat": f.get("birim_fiyat"), "tutar": t, "gorsel": gorsel,
                      "kasa_sahibi": kasa.value if self.yonetici else self.ben["id"]}
+            if getattr(self, "fatura_kategori_var", True):
+                kayit["kategori"] = kategori.value
+            if mevcut:
+                try:
+                    await self.arka(self.supa.tablo_guncelle, "hb_faturalar", mevcut["id"], kayit)
+                except hb.ApiHatasi as ex:
+                    if "kategori" not in ex.mesaj:
+                        raise
+                    self.fatura_kategori_var = False
+                    kayit.pop("kategori", None)
+                    await self.arka(self.supa.tablo_guncelle, "hb_faturalar", mevcut["id"], kayit)
+                await self._islem(lambda: None, basari="Fatura güncellendi ✓")
+                return
             onceki = next((x for x in sorted(self.ek["faturalar"], key=lambda x: x.get("fatura_tarihi") or x.get("son_odeme") or "",
                                              reverse=True) if x["tur"] == kayit["tur"]
                            and (not kayit["kurum"] or not x.get("kurum") or hb.urun_anahtari(x["kurum"])[:5] == hb.urun_anahtari(kayit["kurum"])[:5])),
                           None)
             kayit["analiz"] = ak.fatura_karsilastir(kayit, onceki)
-            sonuc = await self._islem(self.supa.tablo_ekle, "hb_faturalar", kayit, basari="Fatura kaydedildi ✓")
+            try:
+                sonuc = await self.arka(self.supa.tablo_ekle, "hb_faturalar", kayit)
+            except hb.ApiHatasi as ex:
+                if "kategori" not in ex.mesaj:
+                    self.bildir(f"Kaydedilemedi: {ex}", GIDER)
+                    return False
+                self.fatura_kategori_var = False  # guncelleme_7.sql henüz çalıştırılmamış
+                kayit.pop("kategori", None)
+                sonuc = await self.arka(self.supa.tablo_ekle, "hb_faturalar", kayit)
+            await self._islem(lambda: None, basari="Fatura kaydedildi ✓")
             if sonuc is not None:
                 self.dialog_ac(ft.AlertDialog(title=yazi("Fatura analizi", 17, True), content=yazi(kayit["analiz"], 13.5),
                                               actions=[buton("Tamam", lambda e: self.dialog_kapat(), tip="text")]))
 
-        self._girdi_dialog("Faturayı kontrol et", [tur, kurum, donem, tutar, ft.Row([tuketim, birim], spacing=8), so] +
-                           ([yazi("Kimin kasası?", 12, renk=ui.SOLUK), kasa] if self.yonetici else []), kaydet)
+        self._girdi_dialog("Faturayı düzenle" if mevcut else "Faturayı kontrol et",
+                           [tur_satiri, yeni_tur, kart_uyari, kurum, donem, tutar, ft.Row([tuketim, birim], spacing=8), so,
+                            kategori] + ([yazi("Kimin kasası?", 12, renk=ui.SOLUK), kasa] if self.yonetici else []), kaydet)
+
+    async def ozel_fatura_turu_ekle(self, ad):
+        import json as _json
+        liste = [t for t in (getattr(self, "ozel_fatura_turleri", None) or []) if t != ad] + [ad]
+        self.ozel_fatura_turleri = liste
+        self._yerel_ayar_yaz(fatura_turleri=liste)
+        try:
+            await self.arka(self.supa.ayar_yaz, "fatura_turleri", _json.dumps(liste, ensure_ascii=False))
+        except Exception:
+            pass
 
     def duzenli_duzenle(self, d=None):
         d = d or {}
@@ -1184,6 +1270,7 @@ class EkOzellikler:
 
     def pin_ekrani(self, devam):
         """Uygulama açılışında PIN sorar; doğruysa devam() çağrılır."""
+        self._hazir = False
         self.page.navigation_bar = None
         self.page.floating_action_button = None
         if getattr(self, "alt_menu", None):

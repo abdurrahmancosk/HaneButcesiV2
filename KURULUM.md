@@ -96,3 +96,9 @@ Supabase'de bir kez **`guncelleme_4.sql`** çalıştırın, sonra `GitHub_Yukle.
 - **Taksitler** (Planla ve Menü): ne alındı, kart, aylık tutar, kalan taksit, ayın kaçında ödendiği, kategori, kasa. Ödeme gününden bir gün önce ve o gün ikinize bildirim. Aynı karttaki taksitler tek “kart ödemesi” olarak görünür; “Ödedim” her birini kendi kategorisiyle harcamalara ekler ve kasadan düşer. Kalan taksit borcu ve 6 aylık yük grafiği.
 - **Gerçekten harcanabilir:** Kasa kartında; kasadan bu dönemin ödenmemiş faturaları, taksitleri ve düzenli ödemeleri düşülür. Dokununca dökümü açılır.
 - **Hane sohbeti** (Özet'teki konuşma balonu veya Menü): mesajlar, para isteği (eşiniz “Gönder” deyince aktarım kendiliğinden kaydedilir), bir kaydın detayından “Yorum yaz”, gelen kısa mesajı tek dokunuşla alışveriş listesine ekleme. Her mesaj diğer telefona bildirim olarak gider; gizli kayıtlara yazılan yorumları Hatice görmez.
+
+## Sürüm 2.7.1
+- **Kart ekstresinden taksit:** Taksitler > “Ekstreden ekle” (PDF, ekran görüntüsü ya da kamera). Şifreli PDF'te şifre sorulur (kaydedilmez). Bulunan taksitler listelenir; kayıtlı olanlar güncellenir, yeniler eklenir. Fiş ya da fatura olarak yüklenen ekstre PDF'leri de otomatik olarak buraya yönlendirilir.
+- **Fatura türü ekleme:** Fatura ekranında türün yanındaki **+** ile yeni tür (Okul servisi, Kasko…). “Kredi kartı” ve “Sigorta” hazır. Ödenince hangi harcama kategorisine yazılacağı seçilebilir. Kayıtlı faturalarda **Düzenle**.
+- **Aşağı çekip yenile:** Özet, İşlemler, Planla ve menü sayfalarında ekranı aşağı çekin (ya da Özet'teki “Canlı” etiketine dokunun).
+- **Daha hızlı okuma:** Fiş/fatura/ekstre okurken yapay zekanın uzun “düşünme” adımı kapatıldı.

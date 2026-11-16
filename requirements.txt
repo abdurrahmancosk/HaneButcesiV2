@@ -7,3 +7,4 @@ websockets
 certifi
 pillow
 openpyxl
+pypdf

@@ -141,3 +141,6 @@ begin
 end $$;
 
 select 'Güncelleme 7 tamam' as sonuc;
+
+-- ---------- 3) Faturaya harcama kategorisi (ödenince hangi kategoriye yazılacağı) ----------
+alter table public.hb_faturalar add column if not exists kategori text;

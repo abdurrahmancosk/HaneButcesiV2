@@ -12,7 +12,7 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.7.0"
+SURUM = "2.7.2"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler
@@ -89,7 +89,9 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
 
         self.govde = ft.Container(expand=True)
         self.alt_menu = ft.Container(visible=False, padding=ft.Padding(6, 0, 6, 6))
-        page.add(ft.SafeArea(content=ft.Column([self.govde, self.alt_menu], spacing=0, expand=True), expand=True))
+        self.yenile_bar = ft.ProgressBar(visible=False, color=ANA, bgcolor="#00000000")
+        page.add(ft.SafeArea(content=ft.Column([self.yenile_bar, self.govde, self.alt_menu], spacing=0, expand=True),
+                             expand=True))
 
     # ------------------------------------------------------------ yardımcılar
     def guncelle(self):
@@ -157,6 +159,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         self.giris_ekrani()
 
     def giris_ekrani(self, hata=""):
+        self._hazir = False
         self.page.navigation_bar = None
         self.page.floating_action_button = None
         self.alt_menu.visible = False
@@ -302,6 +305,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         self.alt_menu_ciz()
         self.sekme = 0
         await self.verileri_yenile(ciz=False)
+        self._hazir = True
         self.ekrani_ciz()
 
         self.page.run_task(self.bildirim_acilis)
@@ -321,6 +325,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             if g:
                 self.gelir_turleri = _json.loads(g)
             self.gemini_anahtari = (await self.arka(self.supa.ayar_oku, "gemini_api_key")) or ""
+            ft_ = await self.arka(self.supa.ayar_oku, "fatura_turleri")
+            self.ozel_fatura_turleri = _json.loads(ft_) if ft_ else (self._yerel_ayar().get("fatura_turleri") or [])
             if self.yonetici:
                 self.gizli_varsayilan = (await self.arka(self.supa.ayar_oku, "gizli_varsayilan")) == "1"
         except Exception as e:
@@ -426,11 +432,15 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
     def ekrani_ciz(self, **kw):
         if getattr(self, "_kamera_acik", False):
             return  # kamera açıkken arka plan yenilemeleri ekranı bozmasın
+        if not self.ben or not getattr(self, "_hazir", False):
+            return  # açılış, giriş ve kilit ekranında arka plan olayları ekranı çizmesin
         ciziciler = [self.ozet_ekrani, self.islemler_ekrani, self.ekle_ekrani, self.fis_ekrani, self.menu_ekrani,
                      self.planla_ekrani]
         self.page.bgcolor = ui.ARKA
         try:
             self.govde.content = ciziciler[self.sekme](**kw)
+            if self.sekme in (0, 1, 4, 5):
+                self.yenileme_bagla(self.govde.content)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -533,7 +543,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             ft.Container(content=ft.Row([ft.Icon(ft.Icons.CIRCLE, size=8, color=GELIR if canli else "#94a3b8"),
                                          yazi("Canlı" if canli else "Bağlanıyor", 11, renk=ui.SOLUK)], spacing=5, tight=True),
                          padding=ft.Padding(10, 6, 10, 6), border_radius=20, border=ui.kenar(),
-                         tooltip="Eşinizin eklediği kayıtlar anında görünür"),
+                         tooltip="Dokunun ya da ekranı aşağı çekin: yenile", on_click=self.cekip_yenile),
             *([self.sohbet_dugmesi()] if len(self.profiller) > 1 else []),
             self.zil_dugmesi(),
         ], spacing=10)
@@ -977,6 +987,10 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             self.ekrani_ciz()
             if mod == "fatura":
                 await self.fatura_sec("resim")
+            elif mod == "ekstre":
+                veri = await self.dosya_sec("resim")
+                if veri:
+                    await self.ekstre_isle(veri, "resim")
             else:
                 await self.fis_sec("resim")
 
@@ -989,6 +1003,9 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             if mod == "fatura":
                 self.ekrani_ciz()
                 await self.fatura_isle(birlesik, "resim")
+            elif mod == "ekstre":
+                self.ekrani_ciz()
+                await self.ekstre_isle(birlesik, "resim")
             else:
                 await self.fis_isle(birlesik, "resim")
 
@@ -1360,6 +1377,18 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         await self.fis_isle(bytes(veri), tip)
 
     async def fis_isle(self, veri: bytes, tip: str):
+        if tip == "pdf":
+            sifreli = await self.arka(ak.pdf_sifreli_mi, veri)
+            metin = "" if sifreli else await self.arka(ak.pdf_metni, veri)
+            if sifreli or ak.ekstre_mi(metin):
+                # banka hesap özetleri genelde şifreli PDF'tir: fiş yerine ekstre olarak işle
+                self.fis = None
+                self.bildir("💳 Bu bir kart ekstresi; taksitler aranacak" if not sifreli else
+                            "🔒 Şifreli PDF: kart ekstresi olarak açılıyor")
+                self.alt_sayfa = "taksitler"
+                self.sekmeye_git(4)
+                await self.ekstre_isle(veri, "pdf")
+                return
         self.fis = {"durum": "isleniyor", "mesaj": "Görsel hazırlanıyor..."}
         self.ekrani_ciz()
         if tip == "pdf":

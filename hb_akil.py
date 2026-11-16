@@ -22,6 +22,18 @@ import hb_core as hb
 # ----------------------------------------------------------------------------
 
 
+def _dusunmesiz(govde: dict, model: str) -> dict:
+    """Fiş/fatura okumada uzun 'düşünme' gereksiz ve yavaş: mümkünse kapat / en aza indir."""
+    m = re.search(r"gemini-(\d+(?:\.\d+)?)", model)
+    surum = float(m.group(1)) if m else 0
+    if surum < 2.5 or "flash" not in model:
+        return govde
+    g = dict(govde)
+    g["generationConfig"] = dict(govde.get("generationConfig") or {})
+    g["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0} if surum < 3 else {"thinkingLevel": "low"}
+    return g
+
+
 def gemini(prompt: str, api_anahtari: str, gorsel: bytes | None = None, mime: str = "image/jpeg",
            json_mod: bool = True, sicaklik: float = 0.2, internet: bool = False):
     if not api_anahtari:
@@ -38,8 +50,15 @@ def gemini(prompt: str, api_anahtari: str, gorsel: bytes | None = None, mime: st
     son = "bilinmeyen hata"
     for model in hb.gemini_modelleri(api_anahtari):
         try:
-            j = hb._http("POST", f"{hb.GEMINI_TABAN}/models/{model}:generateContent", govde=govde,
-                         basliklar={"x-goog-api-key": api_anahtari}, zaman_asimi=90)
+            g = _dusunmesiz(govde, model)
+            try:
+                j = hb._http("POST", f"{hb.GEMINI_TABAN}/models/{model}:generateContent", govde=g,
+                             basliklar={"x-goog-api-key": api_anahtari}, zaman_asimi=90)
+            except hb.ApiHatasi as e:
+                if g is govde or e.durum != 400 or "think" not in e.mesaj.lower():
+                    raise
+                j = hb._http("POST", f"{hb.GEMINI_TABAN}/models/{model}:generateContent", govde=govde,
+                             basliklar={"x-goog-api-key": api_anahtari}, zaman_asimi=90)
             metin = "".join(p.get("text", "") for p in j["candidates"][0]["content"]["parts"]).strip()
             if not json_mod:
                 return metin
@@ -60,7 +79,7 @@ def gemini(prompt: str, api_anahtari: str, gorsel: bytes | None = None, mime: st
 # ----------------------------------------------------------------------------
 # Faturalar
 # ----------------------------------------------------------------------------
-FATURA_TURLERI = ["Elektrik", "Su", "Doğalgaz", "İnternet", "Telefon", "Aidat", "Kira", "Diğer"]
+FATURA_TURLERI = ["Elektrik", "Su", "Doğalgaz", "İnternet", "Telefon", "Aidat", "Kira", "Kredi kartı", "Sigorta", "Diğer"]
 _AY = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
 
 
@@ -71,9 +90,10 @@ def _tarih_al(v) -> str | None:
     return d.date().isoformat() if d else None
 
 
-def fatura_analiz_et(gorsel: bytes, mime: str, api_anahtari: str) -> dict:
+def fatura_analiz_et(gorsel: bytes, mime: str, api_anahtari: str, turler: list[str] | None = None) -> dict:
+    turler = turler or FATURA_TURLERI
     istem = f"""Bu bir Türk fatura belgesi (elektrik, su, doğalgaz, internet, telefon, aidat vb.). Bilgileri oku ve YALNIZCA JSON döndür:
-{{"tur": "{'/'.join(FATURA_TURLERI)} değerlerinden biri",
+{{"tur": "{'/'.join(turler)} değerlerinden biri",
  "kurum": "Fatura kesen kurum (örn: Aras Elektrik, ESKİ, Palen Doğalgaz, Türk Telekom)",
  "abone_no": "abone / tesisat / müşteri no (yoksa boş)",
  "donem": "Fatura dönemi, örn: Ekim 2026",
@@ -84,7 +104,7 @@ def fatura_analiz_et(gorsel: bytes, mime: str, api_anahtari: str) -> dict:
 Kurallar: tutar ödenecek toplam tutardır (KDV dahil). tuketim faturadaki dönem tüketimidir (endeks farkı).
 birim_fiyat yoksa null bırak. Sayılar nokta ondalıklı sayı olsun."""
     j = gemini(istem, api_anahtari, gorsel, mime)
-    tur = j.get("tur") if j.get("tur") in FATURA_TURLERI else "Diğer"
+    tur = j.get("tur") if j.get("tur") in turler else "Diğer"
     tutar = hb.tutar_coz(j.get("tutar")) or 0
     tuketim = hb.tutar_coz(j.get("tuketim"))
     bf = hb.tutar_coz(j.get("birim_fiyat"))
@@ -876,3 +896,120 @@ def halka_png(dilimler: list[tuple[str, float, str]], ust: str, alt: str, koyu: 
     tampon = io.BytesIO()
     im2.save(tampon, format="PNG")
     return tampon.getvalue()
+
+
+# ----------------------------------------------------------------------------
+# Kredi kartı ekstresi (hesap özeti): PDF şifresi, metin, taksit çıkarma
+# ----------------------------------------------------------------------------
+class PdfSifreli(Exception):
+    """PDF şifreli; doğru şifre gerekli (yanlis=True: girilen şifre tutmadı)."""
+    def __init__(self, yanlis=False, desteklenmiyor=False):
+        super().__init__("PDF şifreli")
+        self.yanlis = yanlis
+        self.desteklenmiyor = desteklenmiyor
+
+
+def pdf_sifresini_coz(veri: bytes, sifre: str | None = None) -> bytes:
+    """Şifreli PDF'i açıp şifresiz kopyasını döndürür; şifresizse aynen döner."""
+    try:
+        import pypdf
+    except Exception:
+        return veri
+    try:
+        okuyucu = pypdf.PdfReader(io.BytesIO(veri))
+    except Exception:
+        return veri
+    if not okuyucu.is_encrypted:
+        return veri
+    try:
+        sonuc = okuyucu.decrypt(sifre or "")
+    except Exception as e:  # AES için kripto kütüphanesi yoksa
+        if "cryptography" in str(e).lower() or "pycryptodome" in str(e).lower() or "dependency" in type(e).__name__.lower():
+            raise PdfSifreli(desteklenmiyor=True) from None
+        raise PdfSifreli(yanlis=bool(sifre)) from None
+    if not sonuc:
+        raise PdfSifreli(yanlis=bool(sifre))
+    yazici = pypdf.PdfWriter()
+    for sayfa in okuyucu.pages:
+        yazici.add_page(sayfa)
+    cikti = io.BytesIO()
+    yazici.write(cikti)
+    return cikti.getvalue()
+
+
+def pdf_metni(veri: bytes, sayfa: int = 3) -> str:
+    try:
+        import pypdf
+        okuyucu = pypdf.PdfReader(io.BytesIO(veri))
+        if okuyucu.is_encrypted:
+            return ""
+        return "\n".join((p.extract_text() or "") for p in okuyucu.pages[:sayfa])
+    except Exception:
+        return ""
+
+
+def pdf_sifreli_mi(veri: bytes) -> bool:
+    try:
+        import pypdf
+        return bool(pypdf.PdfReader(io.BytesIO(veri)).is_encrypted)
+    except Exception:
+        return b"/Encrypt" in veri[:200000] or b"/Encrypt" in veri[-200000:]
+
+
+_EKSTRE_IZLERI = ("hesap özeti", "hesap ozeti", "ekstre", "son ödeme tarihi", "son odeme tarihi", "asgari ödeme",
+                  "asgari odeme", "dönem borcu", "donem borcu", "kart limiti", "hesap kesim")
+
+
+def ekstre_mi(metin: str) -> bool:
+    m = (metin or "").lower()
+    return sum(1 for iz in _EKSTRE_IZLERI if iz in m) >= 2
+
+
+def ekstre_analiz_et(veri: bytes, mime: str, api_anahtari: str, kategoriler: list[str]) -> dict:
+    istem = f"""Bu bir Türk bankasının kredi kartı hesap özeti (ekstre). Yalnızca şu JSON'u döndür:
+{{"banka": "banka adı", "kart": "kart adı (örn. Bonus, World, Axess, Maximum, CardFinans)",
+"hesap_kesim": "YYYY-MM-DD", "son_odeme": "YYYY-MM-DD", "donem_borcu": 0.0, "asgari": 0.0,
+"taksitler": [{{"ad": "işyeri / ürün adı, sade ve okunur", "aylik_tutar": 0.0, "taksit_no": 3, "toplam_taksit": 6,
+  "islem_tarihi": "YYYY-MM-DD", "kategori": "listeden biri"}}],
+"diger_harcamalar": [{{"ad": "işyeri", "tutar": 0.0, "tarih": "YYYY-MM-DD"}}]}}
+Kurallar:
+- "taksitler": bu ekstrede yer alan TAKSİTLİ işlemler. "3/6", "3. taksit / 6", "Taksit 3/6" gibi ifadelerden taksit_no ve
+  toplam_taksit çıkar; aylik_tutar bu ekstreye düşen taksit tutarıdır (toplam işlem tutarı DEĞİL).
+- Taksitsiz alışverişler "diger_harcamalar"a; ödemeler, faiz, BSMV, ücretler, iadeler hiçbir listeye girmez.
+- Tutarlar sayı olsun (1.234,56 → 1234.56). Bulamadığın alanı null yap, uydurma.
+- Kategori şu listeden biri olsun: {json.dumps(kategoriler, ensure_ascii=False)}"""
+    sonuc = gemini(istem, api_anahtari, gorsel=veri, mime=mime, sicaklik=0.1)
+    if not isinstance(sonuc, dict):
+        raise hb.ApiHatasi(500, "Ekstre okunamadı")
+
+    def _t(x):
+        try:
+            return dt.date.fromisoformat(str(x)[:10])
+        except Exception:
+            d = hb.tarih_coz(str(x), varsayilan=None) if x else None
+            return d.date() if d else None
+
+    taksitler = []
+    for t in sonuc.get("taksitler") or []:
+        if not isinstance(t, dict):
+            continue
+        tutar = hb.tutar_coz(t.get("aylik_tutar"))
+        try:
+            no, toplam = int(t.get("taksit_no") or 0), int(t.get("toplam_taksit") or 0)
+        except Exception:
+            no, toplam = 0, 0
+        if not tutar or tutar <= 0 or toplam < 1 or not 1 <= no <= toplam:
+            continue
+        kat = t.get("kategori") if t.get("kategori") in kategoriler else "Diğer"
+        taksitler.append({"ad": str(t.get("ad") or "Taksitli alışveriş").strip()[:60], "aylik_tutar": round(abs(tutar), 2),
+                          "taksit_no": no, "toplam_taksit": toplam, "islem_tarihi": _t(t.get("islem_tarihi")),
+                          "kategori": kat})
+    diger = []
+    for h in sonuc.get("diger_harcamalar") or []:
+        if isinstance(h, dict) and hb.tutar_coz(h.get("tutar")):
+            diger.append({"ad": str(h.get("ad") or "").strip()[:60], "tutar": abs(hb.tutar_coz(h.get("tutar"))),
+                          "tarih": _t(h.get("tarih"))})
+    return {"banka": (sonuc.get("banka") or "").strip(), "kart": (sonuc.get("kart") or "").strip(),
+            "hesap_kesim": _t(sonuc.get("hesap_kesim")), "son_odeme": _t(sonuc.get("son_odeme")),
+            "donem_borcu": hb.tutar_coz(sonuc.get("donem_borcu")), "asgari": hb.tutar_coz(sonuc.get("asgari")),
+            "taksitler": taksitler, "diger": diger}

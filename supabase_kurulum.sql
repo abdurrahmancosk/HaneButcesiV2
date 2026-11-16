@@ -1100,3 +1100,6 @@ begin
 end $$;
 
 select 'Güncelleme 7 tamam' as sonuc;
+
+-- ---------- Faturaya harcama kategorisi ----------
+alter table public.hb_faturalar add column if not exists kategori text;

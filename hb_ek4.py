@@ -8,6 +8,7 @@ import datetime as dt
 
 import flet as ft
 
+import hb_akil as ak
 import hb_core as hb
 import hb_ui as ui
 from hb_ui import (ANA, AKTARIM, GELIR, GIDER, ORTA, acilir, buton, golge, kart, saydam, simge_kutusu, yazi)
@@ -104,7 +105,12 @@ class EkOzellikler4:
             bgcolor=ui.KASA_ZEMIN, border_radius=24, padding=18, shadow=None if ui.KOYU else golge(1),
             border=ui.kenar() if ui.KOYU else None)
 
-        ogeler = [ust, buton("Yeni taksit ekle", lambda e: self.taksit_duzenle(), ft.Icons.ADD_CARD_ROUNDED)]
+        ogeler = [ust, ft.Row([
+            buton("Ekstreden ekle", lambda e: self.ekstre_yukle(), ft.Icons.DOCUMENT_SCANNER_ROUNDED, expand=True),
+            buton("Elle ekle", lambda e: self.taksit_duzenle(), ft.Icons.ADD_CARD_ROUNDED, tip="outlined", expand=True)],
+            spacing=8),
+            yazi("Ekstreden ekle: bankanın PDF hesap özetini ya da ekran görüntüsünü verin; taksitler kendiliğinden bulunur, "
+                 "var olanlar güncellenir.", 11, renk=ui.SOLUK)]
         for (kartadi, sahip, vade), ts in self.taksit_gruplari(gorunen):
             toplam = sum(float(t["aylik_tutar"]) for t in ts)
             kalan = (vade - bugun).days
@@ -580,4 +586,231 @@ class EkOzellikler4:
         if self.sekme == 4 and self.alt_sayfa == "sohbet":
             self.ekrani_ciz()
         elif self.sekme == 0:
+            self.ekrani_ciz()
+
+
+    # ================================================================== kart ekstresinden taksit
+    def ekstre_yukle(self):
+        def git(f):
+            async def _(e):
+                self.dialog_kapat(d)
+                await f()
+            return _
+
+        async def pdf():
+            veri = await self.dosya_sec("pdf")
+            if veri:
+                await self.ekstre_isle(veri, "pdf")
+
+        async def foto():
+            veri = await self.dosya_sec("resim")
+            if veri:
+                await self.ekstre_isle(veri, "resim")
+
+        async def kamera():
+            await self.kamera_ekrani(mod="ekstre")
+
+        secenekler = [buton("PDF ekstre seç", git(pdf), ft.Icons.PICTURE_AS_PDF_ROUNDED),
+                      buton("Ekran görüntüsü / fotoğraf", git(foto), ft.Icons.PHOTO_LIBRARY_ROUNDED, tip="outlined")]
+        if self.mobil:
+            secenekler.append(buton("Kamerayla çek", git(kamera), ft.Icons.PHOTO_CAMERA_ROUNDED, tip="outlined"))
+        d = ft.AlertDialog(title=yazi("Kart ekstresinden taksit ekle", 17, True), content=ft.Column([
+            yazi("Bankanın e-posta ile gönderdiği PDF hesap özetini seçin. PDF şifreliyse şifresi sorulur (çoğu bankada "
+                 "T.C. kimlik no'nun son 6 hanesi veya doğum tarihi). Uygulamadan da ekran görüntüsü alabilirsiniz.", 12,
+                 renk=ui.SOLUK), *secenekler], tight=True, spacing=10),
+            actions=[buton("Vazgeç", lambda e: self.dialog_kapat(d), tip="text")])
+        self.dialog_ac(d)
+
+    def _pdf_sifre_sor(self, veri, yanlis=False):
+        alan = ft.TextField(label="PDF şifresi", password=True, can_reveal_password=True, autofocus=True,
+                            keyboard_type=ft.KeyboardType.NUMBER)
+
+        async def tamam():
+            if not (alan.value or "").strip():
+                return False
+            self.page.run_task(self.ekstre_isle, veri, "pdf", alan.value.strip())
+
+        self._girdi_dialog("Ekstre şifreli", [
+            *([yazi("Şifre tutmadı, tekrar deneyin.", 12, "sb", renk=GIDER)] if yanlis else []),
+            yazi("Bankanın PDF şifresini girin (genelde T.C. kimlik no'nun son 6 hanesi ya da doğum tarihi GGAAYYYY). "
+                 "Şifre kaydedilmez, yalnızca bu dosyayı açmak için kullanılır.", 11.5, renk=ui.SOLUK), alan], tamam, "Aç")
+
+    async def ekstre_isle(self, veri: bytes, tip: str, sifre: str | None = None):
+        if not self.gemini_anahtari:
+            self.bildir("Ekstre okumak için Menü > Ayarlar'da Gemini anahtarı gerekli.", GIDER)
+            return
+        mime = "application/pdf"
+        if tip == "pdf":
+            try:
+                veri = await self.arka(ak.pdf_sifresini_coz, veri, sifre)
+            except ak.PdfSifreli as e:
+                if e.desteklenmiyor:
+                    self.bildir("Bu PDF'in şifreleme türü telefonda açılamıyor. Ekstreyi PDF görüntüleyicide açıp ekran "
+                                "görüntüsü alın ve “Ekran görüntüsü / fotoğraf” ile yükleyin.", GIDER)
+                    return
+                self._pdf_sifre_sor(veri, yanlis=e.yanlis)
+                return
+        else:
+            veri, mime = await self.arka(hb.gorseli_hazirla, veri)
+        self.bildir("💳 Ekstre okunuyor, taksitler aranıyor…")
+        try:
+            sonuc = await self.arka(ak.ekstre_analiz_et, veri, mime, self.gemini_anahtari, self.kategoriler)
+        except Exception as ex:
+            self.bildir(f"Ekstre okunamadı: {ex}", GIDER)
+            return
+        self.ekstre_onay(sonuc)
+
+    def _taksit_eslestir(self, t, kartadi):
+        en_iyi, puan = None, 0.0
+        for x in self.ek.get("taksitler", []):
+            if int(x["toplam_taksit"]) != int(t["toplam_taksit"]) or abs(float(x["aylik_tutar"]) - t["aylik_tutar"]) > 1.0:
+                continue
+            p = ak._benzerlik(x["ad"], t["ad"]) + (0.3 if kartadi and (x.get("kart") or "").lower() == kartadi.lower() else 0)
+            if p > puan:
+                en_iyi, puan = x, p
+        return en_iyi if puan >= 0.35 else None
+
+    def ekstre_onay(self, s):
+        bugun = hb.simdi().date()
+        kartadi = s.get("kart") or s.get("banka") or ""
+        kart_tf = ft.TextField(label="Kart adı", value=kartadi, dense=True)
+        son = s.get("son_odeme")
+        son_tf = ft.TextField(label="Son ödeme tarihi (GG.AA.YYYY)", value=son.strftime("%d.%m.%Y") if son else "", dense=True)
+        kasa = self._kasa_secici()
+        satirlar, secimler = [], []
+        for t in s["taksitler"]:
+            var = self._taksit_eslestir(t, kartadi)
+            odenen_yeni = t["taksit_no"] - 1
+            if var and int(var.get("odenen") or 0) >= t["taksit_no"]:
+                durum, renk, varsayilan = "Kayıtlı ve bu taksit ödenmiş", ui.SOLUK, False
+            elif var:
+                durum, renk, varsayilan = (f"Kayıtlı: {int(var.get('odenen') or 0) + 1}/{var['toplam_taksit']} → "
+                                           f"{t['taksit_no']}/{t['toplam_taksit']} olarak güncellenecek"), "#d97706", True
+            else:
+                durum, renk, varsayilan = "Yeni taksit", GELIR, True
+            cb = ft.Checkbox(value=varsayilan)
+            kat = acilir("Kategori", self.kategoriler, t["kategori"], dense=True)
+            secimler.append((cb, kat, t, var, odenen_yeni))
+            satirlar.append(ft.Container(content=ft.Column([
+                ft.Row([cb, ft.Column([yazi(t["ad"], 13.5, "sb"),
+                                       yazi(f"{t['taksit_no']}/{t['toplam_taksit']}. taksit • aylık {hb.tl(t['aylik_tutar'])} • "
+                                            f"kalan {hb.tl(t['aylik_tutar'] * (t['toplam_taksit'] - odenen_yeni))}", 11,
+                                            renk=ui.SOLUK),
+                                       yazi(durum, 11, "sb", renk=renk)], spacing=1, expand=True)], spacing=4,
+                       vertical_alignment=ft.CrossAxisAlignment.START),
+                kat], spacing=4), bgcolor=ui.ZEMIN2, border_radius=14, padding=10))
+        ozet = [yazi(" • ".join(x for x in [s.get("banka"), f"dönem borcu {hb.tl(s['donem_borcu'])}" if s.get("donem_borcu") else "",
+                                            f"asgari {hb.tl(s['asgari'])}" if s.get("asgari") else ""] if x), 12, renk=ui.SOLUK)]
+        if s.get("diger"):
+            ozet.append(kart(yazi(f"Ekstrede taksitsiz {len(s['diger'])} harcama da var "
+                                  f"({hb.tl(sum(h['tutar'] for h in s['diger']))}); bunlar eklenmedi.", 11.5, renk="#b45309"),
+                             renk=ui.UYARI_ZEMIN, dolgu=10))
+        if not s["taksitler"]:
+            ozet.append(kart(yazi("Bu ekstrede taksitli işlem bulunamadı. Doğru belge mi? Gerekirse ekran görüntüsüyle tekrar "
+                                  "deneyin ya da taksidi elle ekleyin.", 12, renk=GIDER), renk=ui.UYARI_ZEMIN))
+
+        async def kaydet():
+            so = hb.tarih_coz(son_tf.value).date() if (son_tf.value or "").strip() else None
+            if not so:
+                self.bildir("Son ödeme tarihini girin.", GIDER)
+                return False
+            sahip = kasa.value if self.yonetici else self.ben["id"]
+            yeni = guncel = 0
+            try:
+                for cb, kat, t, var, odenen in secimler:
+                    if not cb.value:
+                        continue
+                    ay = so.month - 1 - odenen
+                    y, m = so.year + ay // 12, ay % 12 + 1
+                    ilk = dt.date(y, m, min(so.day, calendar.monthrange(y, m)[1]))
+                    kayit = {"ad": t["ad"], "kart": (kart_tf.value or "").strip() or None, "aylik_tutar": t["aylik_tutar"],
+                             "toplam_taksit": t["toplam_taksit"], "odenen": odenen, "odeme_gunu": so.day,
+                             "ilk_odeme": ilk.isoformat(), "kategori": kat.value or "Diğer", "aktif": True}
+                    if var:
+                        kayit.pop("ad")
+                        await self.arka(self.supa.tablo_guncelle, "hb_taksitler", var["id"], kayit)
+                        guncel += 1
+                    else:
+                        kayit["kasa_sahibi"] = sahip
+                        await self.arka(self.supa.tablo_ekle, "hb_taksitler", kayit)
+                        yeni += 1
+            except Exception as ex:
+                self.bildir(f"Kaydedilemedi: {ex}", GIDER)
+                return False
+            self.bildir(f"✓ {yeni} yeni taksit eklendi" + (f", {guncel} taksit güncellendi" if guncel else "")
+                        + f" • son ödeme {so.day} {ui.AYLAR_UZUN[so.month - 1]}", GELIR)
+            await self.ek_verileri_yenile()
+            self.alt_sayfa = "taksitler"
+            self.sekmeye_git(4)
+
+        alanlar = [*ozet, ft.Row([ft.Container(content=kart_tf, expand=True), ft.Container(content=son_tf, expand=True)],
+                                 spacing=8), *satirlar]
+        if self.yonetici and s["taksitler"]:
+            alanlar += [yazi("Hangi kasadan ödeniyor?", 12, renk=ui.SOLUK), kasa]
+        if s["taksitler"]:
+            alanlar.append(yazi("Bu ayki taksitler henüz ödenmemiş sayılır; ödeyince Taksitler'de “Ödedim” deyin.", 11,
+                                renk=ui.SOLUK))
+        self._girdi_dialog("Ekstrede bulunan taksitler", alanlar, kaydet, "Taksitleri kaydet" if s["taksitler"] else "Kapat")
+
+    # ================================================================== aşağı çekip yenile
+    def yenileme_bagla(self, kok):
+        """Ekrandaki ilk kaydırılabilir listeye 'aşağı çek → yenile' bağlar."""
+        def bul(c, derin=0):
+            if c is None or derin > 5:
+                return None
+            if type(c).__name__ == "ListView":
+                return c
+            for ad in ("content", "controls"):
+                v = getattr(c, ad, None)
+                for x in (v if isinstance(v, list) else [v] if v is not None else []):
+                    if isinstance(x, ft.Control):
+                        r = bul(x, derin + 1)
+                        if r is not None:
+                            return r
+            return None
+
+        lv = bul(kok)
+        if lv is None or getattr(lv, "_cek_bagli", False):
+            return
+        durum = {"cekme": 0.0}
+
+        def kaydirma(e):
+            tur = str(getattr(e, "event_type", None) or getattr(e, "type", "") or "").lower()
+            px = float(getattr(e, "pixels", 0) or 0)
+            ov = float(getattr(e, "overscroll", 0) or 0)
+            if "start" in tur or "end" in tur:
+                durum["cekme"] = 0.0
+                return
+            if "over" in tur and ov < 0:
+                durum["cekme"] += ov
+            if durum["cekme"] < -70 or px < -80:
+                durum["cekme"] = 0.0
+                self.page.run_task(self.cekip_yenile)
+
+        lv.on_scroll = kaydirma
+        try:
+            lv._cek_bagli = True
+        except Exception:
+            pass
+
+    async def cekip_yenile(self, e=None):
+        import time as _t
+        if getattr(self, "_cek_yenileniyor", False) or _t.time() - getattr(self, "_cek_son", 0) < 3:
+            return
+        self._cek_yenileniyor = True
+        self._cek_son = _t.time()
+        bar = getattr(self, "yenile_bar", None)
+        if bar is not None:
+            bar.visible = True
+            self.guncelle()
+        try:
+            await asyncio.gather(self.verileri_yenile(ciz=False), self.mesajlari_yukle(), return_exceptions=True)
+            if self.cevrimdisi:
+                self.bildir("📴 İnternet yok – son kaydedilen veriler gösteriliyor", GIDER)
+            else:
+                self.bildir("✓ Güncellendi", GELIR)
+        finally:
+            self._cek_yenileniyor = False
+            if bar is not None:
+                bar.visible = False
             self.ekrani_ciz()
