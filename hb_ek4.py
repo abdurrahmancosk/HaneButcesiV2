@@ -814,6 +814,7 @@ class EkOzellikler4:
             await asyncio.gather(self.verileri_yenile(ciz=False), self.mesajlari_yukle(), return_exceptions=True)
             if self.mail_otomatik(0.5):
                 self.page.run_task(self.mail_kontrol, True)
+            self.page.run_task(self.kurumlari_sorgula, 2, True)
             if self.cevrimdisi:
                 self.bildir("📴 İnternet yok – son kaydedilen veriler gösteriliyor", GIDER)
             else:
@@ -1108,11 +1109,16 @@ class EkOzellikler4:
                                f"Her ayın ~{ab['beklenen_gun']}'i" if ab.get("beklenen_gun") else None] if x]
             son = (f"Son fatura: {hb.tl(f['tutar'])}" + (f" • {f['donem']}" if f.get("donem") else "")
                    + (" • ödendi" if f.get("odendi") else " • ödenmedi")) if f else "Henüz fatura yok"
+            if ab.get("baglanti"):
+                son = (ab.get("son_bilgi") or "Henüz sorgulanmadı") + (
+                    f" • {hb.tarih_goster(ab['son_sorgu'])}" if ab.get("son_sorgu") else "") + " • " + son
             ogeler.append(ft.Container(content=ft.Row([
                 simge_kutusu(_ikon(simge), renk, 18, 38),
                 ft.Column([yazi(ab["tur"], 14, True), yazi(" • ".join(alt), 11, renk=ui.SOLUK),
                            yazi(son, 11.5, "sb", renk=ui.YAZI if f else ui.SOLUK)], spacing=1, expand=True),
-                ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.SOLUK)], spacing=10),
+                ft.IconButton(icon=ft.Icons.TRAVEL_EXPLORE_ROUNDED, tooltip="Kurumdan şimdi sorgula", icon_color=ui.VURGU,
+                              on_click=lambda e, ab=ab: self.page.run_task(self._tek_sorgu, ab))
+                if ab.get("baglanti") else ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.SOLUK)], spacing=10),
                 bgcolor=ui.KART, border_radius=18, padding=12, border=ui.kenar() if ui.KOYU else None,
                 shadow=None if ui.KOYU else golge(0.4), opacity=1 if ab.get("aktif", True) else 0.5,
                 on_click=lambda e, ab=ab: self.abonelik_duzenle(ab)))
@@ -1130,16 +1136,57 @@ class EkOzellikler4:
                            keyboard_type=ft.KeyboardType.NUMBER)
         aktif = ft.Switch(label="Aktif", value=ab.get("aktif", True))
         kasa = self._kasa_secici(ab.get("kasa_sahibi"))
+        import hb_kurum
+        secenek = ["Yok"] + [v[0] for v in hb_kurum.KURUMLAR.values()]
+        bag_ad = hb_kurum.KURUMLAR.get(ab.get("baglanti") or "", ("Yok",))[0]
+        if not ab.get("id") and not ab.get("baglanti") and (ab.get("tur") == "Su" or "eski" in (ab.get("kurum") or "").lower()):
+            bag_ad = hb_kurum.KURUMLAR["eski"][0]
+        baglanti = acilir("Kurumdan otomatik borç sorgusu", secenek, bag_ad)
+        musteri = ft.TextField(label="Müşteri no", value=ab.get("musteri_no") or "", dense=True,
+                               keyboard_type=ft.KeyboardType.NUMBER, visible=bag_ad != "Yok")
+        bag_bilgi = yazi("ESKİ'nin borç sorgulama sayfasından tesisat no (yukarıdaki abone no) + müşteri no ile günde iki kez "
+                         "otomatik sorgulanır; borç çıkınca fatura eklenir, borç yoksa ödenmemiş görünen faturalar kapanır.",
+                         11, renk=ui.SOLUK, visible=bag_ad != "Yok")
+
+        def bag_degisti(e):
+            musteri.visible = bag_bilgi.visible = baglanti.value != "Yok"
+            if baglanti.value != "Yok":
+                tur.value = "Su"
+                if not (kurum.value or "").strip():
+                    kurum.value = "ESKİ"
+                no.label = "Tesisat no"
+            self.guncelle()
+
+        baglanti.on_change = bag_degisti
 
         async def kaydet():
             g = int(hb.tutar_coz(gun.value) or 0) or None
+            bag = next((k for k, v in hb_kurum.KURUMLAR.items() if v[0] == baglanti.value), None)
+            if bag and (not (no.value or "").strip().isdigit() or not (musteri.value or "").strip().isdigit()):
+                self.bildir("Otomatik sorgu için tesisat no ve müşteri no (yalnız rakam) gerekli.", GIDER)
+                return False
             kayit = {"tur": tur.value, "kurum": (kurum.value or "").strip() or None, "abone_no": (no.value or "").strip() or None,
                      "beklenen_gun": g if g and 1 <= g <= 31 else None, "aktif": bool(aktif.value),
                      "kasa_sahibi": kasa.value if self.yonetici else self.ben["id"]}
-            if ab.get("id"):
-                await self._islem(self.supa.tablo_guncelle, "hb_abonelikler", ab["id"], kayit, basari="Güncellendi ✓")
-            else:
-                await self._islem(self.supa.tablo_ekle, "hb_abonelikler", kayit, basari="Abonelik eklendi ✓")
+            if bag or ab.get("baglanti"):
+                kayit.update(baglanti=bag, musteri_no=(musteri.value or "").strip() or None)
+            try:
+                if ab.get("id"):
+                    await self.arka(self.supa.tablo_guncelle, "hb_abonelikler", ab["id"], kayit)
+                    hedef = dict(ab, **kayit)
+                else:
+                    r = await self.arka(self.supa.tablo_ekle, "hb_abonelikler", kayit)
+                    hedef = r[0] if r else dict(kayit)
+            except hb.ApiHatasi as ex:
+                self.bildir("Kaydedilemedi: " + ("Supabase'de guncelleme_9.sql çalıştırılmamış" if "baglanti" in ex.mesaj
+                                                 or "musteri_no" in ex.mesaj else str(ex)), GIDER)
+                return False
+            self.bildir("Kaydedildi ✓", GELIR)
+            await self.ek_verileri_yenile()
+            self.ekrani_ciz()
+            if bag:
+                await self.kurum_sorgula(hedef, sessiz=False)
+                self.ekrani_ciz()
 
         def sil(d):
             async def s(e):
@@ -1148,7 +1195,7 @@ class EkOzellikler4:
             return buton("Sil", s, tip="text")
 
         self._girdi_dialog("Aboneliği düzenle" if ab.get("id") else "Yeni abonelik",
-                           [tur, kurum, no, gun, aktif] + ([yazi("Kimin kasasından ödenir?", 12, renk=ui.SOLUK), kasa]
+                           [tur, kurum, no, baglanti, musteri, bag_bilgi, gun, aktif] + ([yazi("Kimin kasasından ödenir?", 12, renk=ui.SOLUK), kasa]
                                                             if self.yonetici else []), kaydet,
                            ek_eylem=sil if ab.get("id") else None)
 
@@ -1397,3 +1444,88 @@ class EkOzellikler4:
         if silinen:
             await self.ek_verileri_yenile()
             self.bildir(f"🔎 E-postadan yanlışlıkla fatura sayılan {silinen} kayıt kaldırıldı; yeniden değerlendirilecek")
+
+    # ================================================================== kurum sayfasından borç sorgusu (ESKİ)
+    def _bagli_abonelikler(self):
+        return [ab for ab in self.ek.get("abonelikler", []) if ab.get("baglanti") and ab.get("aktif", True)
+                and (self.yonetici or ab.get("kasa_sahibi") == self.ben["id"])]
+
+    async def kurum_sorgula(self, ab, sessiz=True):
+        import hb_kurum
+        try:
+            r = await self.arka(hb_kurum.borc_sorgula, ab["baglanti"], ab.get("abone_no") or "", ab.get("musteri_no"))
+        except Exception as ex:
+            mesaj = str(ex)
+            try:
+                await self.arka(self.supa.tablo_guncelle, "hb_abonelikler", ab["id"],
+                                {"son_sorgu": hb.iso_tarih(hb.simdi()), "son_bilgi": f"Sorgulanamadı: {mesaj[:120]}"})
+            except Exception:
+                pass
+            if not sessiz:
+                self.bildir(f"{ab.get('kurum') or ab['tur']}: sorgulanamadı – {mesaj}", GIDER)
+            return None
+        kurum = hb_kurum.KURUMLAR.get(ab["baglanti"], (ab.get("kurum") or "Kurum",))[0]
+        yeni = 0
+        if not r["borc_yok"]:
+            kalemler = r["kalemler"] or [{"tutar": r["toplam"], "son_odeme": None, "donem": None}]
+            for k in kalemler:
+                anahtar = f"{ab['baglanti']}:{ab.get('abone_no')}:{k.get('donem') or k.get('son_odeme') or hb.simdi().strftime('%Y-%m')}:{k['tutar']:.2f}"
+                kayit = {"tur": ab.get("tur") or "Su", "kurum": ab.get("kurum") or kurum.split(" –")[0],
+                         "abone_no": ab.get("abone_no"), "donem": k.get("donem"), "son_odeme": k.get("son_odeme"),
+                         "tutar": k["tutar"], "kasa_sahibi": ab.get("kasa_sahibi") or self.ben["id"], "mail_id": anahtar,
+                         "kategori": "Kira & Aidat & Faturalar",
+                         "analiz": f"{kurum} borç sorgusundan otomatik eklendi ({hb.tarih_goster(r['zaman'])})."}
+                try:
+                    if await self.arka(self.supa.fatura_mailden_ekle, kayit):
+                        yeni += 1
+                except Exception as ex:
+                    print("Kurum faturası eklenemedi:", ex)
+        bilgi = (f"Borç yok ✓" if r["borc_yok"] else f"Borç: {hb.tl(r['toplam'])}"
+                 + (f" (gecikme {hb.tl(r['gecikme'])})" if r.get("gecikme") else ""))
+        try:
+            await self.arka(self.supa.tablo_guncelle, "hb_abonelikler", ab["id"],
+                            {"son_sorgu": r["zaman"], "son_borc": r["toplam"], "son_bilgi": bilgi})
+        except Exception:
+            pass
+        ab.update(son_sorgu=r["zaman"], son_borc=r["toplam"], son_bilgi=bilgi)
+        # kurumda borç yoksa, uygulamada "ödenmedi" duran o aboneliğin faturaları ödenmiştir
+        bekleyen = [f for f in self.ek.get("faturalar", []) if not f.get("odendi") and f.get("id")
+                    and ((ab.get("abone_no") and f.get("abone_no") == ab.get("abone_no"))
+                         or (not f.get("abone_no") and f.get("tur") == ab.get("tur")))]
+        kapanan = 0
+        if r["borc_yok"] and bekleyen:
+            for f in bekleyen:
+                odeme = await self.fatura_odemesini_bul(f)
+                alanlar = {"odendi": True}
+                if odeme:
+                    alanlar["odeme_islem_id"] = odeme["id"]
+                else:
+                    alanlar["analiz"] = ((f.get("analiz") or "") + f"\n{kurum} sorgusunda borç görünmüyor: ödenmiş sayıldı "
+                                         "(kasadan düşülmedi; ödemeyi kaydetmediyseniz harcama olarak ekleyin).").strip()
+                try:
+                    await self.arka(self.supa.tablo_guncelle, "hb_faturalar", f["id"], alanlar)
+                    kapanan += 1
+                except Exception as ex:
+                    print("Fatura kapatılamadı:", ex)
+        if yeni or kapanan:
+            await self.ek_verileri_yenile()
+            self.bildir(f"💧 {kurum}: " + ", ".join(x for x in [f"{yeni} yeni borç faturası eklendi" if yeni else "",
+                                                                f"{kapanan} fatura ödenmiş görünüyor" if kapanan else ""] if x),
+                        GIDER if yeni else GELIR)
+        elif not sessiz:
+            self.bildir(f"💧 {kurum}: {bilgi}", GELIR if r["borc_yok"] else GIDER)
+        return r
+
+    async def _tek_sorgu(self, ab):
+        self.bildir(f"🔎 {ab.get('kurum') or ab['tur']} sorgulanıyor…")
+        await self.kurum_sorgula(ab, sessiz=False)
+        self.ekrani_ciz()
+
+    async def kurumlari_sorgula(self, en_az_saat=12, sessiz=True):
+        for ab in self._bagli_abonelikler():
+            son = ab.get("son_sorgu")
+            if son and (hb.simdi() - hb.tarih_yerel(son)).total_seconds() < en_az_saat * 3600:
+                continue
+            await self.kurum_sorgula(ab, sessiz)
+        if self.sekme == 4 and self.alt_sayfa in ("abonelikler", "faturalar"):
+            self.ekrani_ciz()

@@ -34,7 +34,7 @@ if exist "build-apk.yml" (
     copy /y "build-apk.yml" ".github\workflows\build-apk.yml" >nul
 )
 
-git add main.py hb_core.py hb_ui.py hb_ek.py hb_ek2.py hb_ek3.py hb_ek4.py hb_akil.py assets guncelleme_3.sql guncelleme_4.sql guncelleme_5.sql guncelleme_6.sql guncelleme_7.sql guncelleme_8.sql requirements.txt supabase_kurulum.sql eski_veri_aktar.sql guncelleme_2.sql kasa_kontrol.sql KURULUM.md .gitignore GitHub_Yukle.bat EXE_Indir.ps1 build-apk.yml .github
+git add main.py hb_core.py hb_ui.py hb_ek.py hb_ek2.py hb_ek3.py hb_ek4.py hb_kurum.py hb_akil.py assets guncelleme_3.sql guncelleme_4.sql guncelleme_5.sql guncelleme_6.sql guncelleme_7.sql guncelleme_8.sql guncelleme_9.sql requirements.txt supabase_kurulum.sql eski_veri_aktar.sql guncelleme_2.sql kasa_kontrol.sql KURULUM.md .gitignore GitHub_Yukle.bat EXE_Indir.ps1 build-apk.yml .github
 set "TARIH=%date% %time%"
 git commit -m "Guncelleme: %TARIH%" --allow-empty
 for /f "usebackq delims=" %%t in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('o')"`) do set "PUSH_ZAMANI=%%t"

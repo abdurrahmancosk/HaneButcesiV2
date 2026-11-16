@@ -116,3 +116,12 @@ Gmail bağlama (bir kez, her cihazda ayrı):
 - Abone numarası olan her yeni kurum **Abonelikler**e kendiliğinden eklenir; beklenen günden 5 gün sonra fatura gelmezse uyarılır.
 - E-postayla gelen kart ekstresi fark edilir: Taksitler sayfasında “taksitleri güncelle” önerisi çıkar.
 - Uygulama şifresi yalnızca o cihazda saklanır (buluta/Hatice'ye gitmez). Mailler okunmamış olarak kalır. İstediğiniz an Ayarlar'dan “Kaldır” ya da Google hesabınızdan şifreyi silerek erişimi kapatabilirsiniz.
+
+## Sürüm 2.9 – ESKİ su borcu otomatik sorgu
+**Önce bir kez:** Supabase > SQL Editor'da `guncelleme_9.sql` içeriğini çalıştırın.
+
+Menü > Abonelikler > (Su aboneliğine dokunun ya da “Abonelik ekle”) → Kurum: ESKİ, “Kurumdan otomatik borç sorgusu”: **ESKİ – Erzurum Su**, abone no alanına **tesisat no**, **müşteri no** → Kaydet.
+- Kaydedince hemen, sonra günde iki kez (ve aşağı çekince en çok 2 saatte bir) ESKİ'nin borç sorgulama sayfası okunur.
+- Borç varsa her dönem için su faturası eklenir (son ödeme tarihiyle) ve hatırlatılır; aynı borç iki kez eklenmez.
+- Borç yoksa uygulamada “ödenmedi” görünen su faturaları kapanır (ödemesi kayıtlarda bulunursa ona bağlanır; bulunamazsa ödenmiş sayılır, kasadan düşülmez).
+- Abonelik kartındaki 🔎 düğmesiyle istediğiniz an sorgulanır. Resmi bir servis değildir; ESKİ sayfası değişirse “Sorgulanamadı” yazar.

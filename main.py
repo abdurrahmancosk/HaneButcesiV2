@@ -12,7 +12,7 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.8.2"
+SURUM = "2.9.0"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler
