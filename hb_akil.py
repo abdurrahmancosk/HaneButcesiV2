@@ -1163,7 +1163,9 @@ def ekstre_plani(s: dict, son_odeme: dt.date, bu_ay: float, ay_siniri: int = 24)
 # E-postadan fatura takibi (Gmail IMAP + uygulama şifresi)
 # ----------------------------------------------------------------------------
 GMAIL_IMAP = "imap.gmail.com"
-MAIL_SORGU = 'newer_than:{gun}d -in:chats -category:promotions (fatura OR "e-fatura" OR "e-arşiv" OR "son ödeme" ' \
+# Bu tarihten önceki e-postalar hiç okunmaz (önceki faturalar uygulamaya zaten girilmiş; mükerrer kayıt olmasın)
+MAIL_BASLANGIC = dt.date(2026, 11, 16)
+MAIL_SORGU = 'after:{after} -in:chats -category:promotions (fatura OR "e-fatura" OR "e-arşiv" OR "son ödeme" ' \
              'OR "fatura tutarı" OR "ödenecek tutar" OR "hesap özeti" OR abone)'
 
 
@@ -1242,7 +1244,9 @@ def mail_faturalari_getir(adres: str, sifre: str, gun: int = 45, gorulen: set | 
                 klasor = s.split(' "/" ')[-1].strip()
                 break
         m.select(klasor, readonly=True)
-        m.literal = MAIL_SORGU.format(gun=gun).encode("utf-8")
+        bas = max(MAIL_BASLANGIC, hb.simdi().date() - dt.timedelta(days=gun))
+        # Gmail "after:" gün başını Pasifik saatine göre alır; bir gün önceden sorup tarihe göre ayrıca süzeriz
+        m.literal = MAIL_SORGU.format(after=(bas - dt.timedelta(days=1)).strftime("%Y/%m/%d")).encode("utf-8")
         typ, veri = m.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
         uidler = (veri[0] or b"").split() if veri else []
         for uid in list(reversed(uidler))[:en_fazla * 2]:
@@ -1262,6 +1266,8 @@ def mail_faturalari_getir(adres: str, sifre: str, gun: int = 45, gorulen: set | 
                 tarih = parsedate_to_datetime(msg.get("Date")).astimezone(hb.TZ)
             except Exception:
                 tarih = hb.simdi()
+            if tarih.date() < bas:
+                continue  # başlangıç tarihinden eski: atla
             sonuc.append({"id": kimlik, "kimden": _baslik(msg.get("From")), "konu": _baslik(msg.get("Subject")),
                           "tarih": tarih, "metin": metin, "pdfler": pdfler})
             if len(sonuc) >= en_fazla:
@@ -1440,3 +1446,72 @@ def kategori_ortalamalari(islemler: list[dict], donemler: list[tuple[dt.date, dt
                 toplam[k] = toplam.get(k, 0.0) + float(i.get("tutar") or 0)
     n = max(1, len(donemler))
     return {k: round(v / n, 2) for k, v in sorted(toplam.items(), key=lambda kv: -kv[1])}
+
+
+# ----------------------------------------------------------------------------
+# Harcama temposu: toplu (sabit) ödemeler ve büyük tek seferlik alışverişler günlük tempoya girmez
+# ----------------------------------------------------------------------------
+SABIT_KATEGORILER = {"Kira & Aidat & Faturalar", "Kredi Kartı, Kredi Ödemesi & Borç", "Yatırım & Altın & Döviz",
+                     "Vergi, Harç & Resmi İşlemler", "Transfer / Birikim"}
+SABIT_ACIKLAMALAR = {"Fatura ödemesi", "Kredi kartı taksidi", "Düzenli ödeme", "Hedefe aktarım", "Varlık alımı"}
+
+
+def sabit_odeme_mi(i: dict) -> bool:
+    """Fatura, kart, kira/aidat, taksit, birikim, yatırım gibi toplu ödemeler."""
+    return (i.get("kategori") in SABIT_KATEGORILER or (i.get("aciklama") or "") in SABIT_ACIKLAMALAR
+            or bool(i.get("hedef_id")))
+
+
+def tempo_analizi(islemler: list[dict], bas: dt.date, bit: dt.date, bugun: dt.date,
+                  kalan_sabit: float = 0.0, onceki: list[dict] | None = None) -> dict | None:
+    """Dönemin harcamasını üçe ayırır: sabit ödemeler, büyük tek seferlik alışverişler, günlük harcamalar.
+    Tahmin = ödenen sabit + büyük alışveriş + bu dönem kalan bilinen sabitler + tipik gün × kalan gün."""
+    toplam_gun = (bit - bas).days + 1
+    if bugun < bas:
+        return None
+    gecen = min((bugun - bas).days + 1, toplam_gun)
+
+    def ayir(kayitlar, b, son_gun):
+        alimlar = {}  # bir fiş = tek alışveriş
+        sabit = 0.0
+        gunluk_sabit = {}
+        for i in kayitlar or []:
+            if i.get("tur") != "Gider":
+                continue
+            g = hb.tarih_yerel(i.get("tarih")).date()
+            if not (b <= g <= son_gun):
+                continue
+            t = float(i.get("tutar") or 0)
+            if sabit_odeme_mi(i):
+                sabit += t
+                gunluk_sabit[g] = gunluk_sabit.get(g, 0) + t
+                continue
+            a = alimlar.setdefault(i.get("fis_grup") or f"k{i.get('id')}", {"gun": g, "tutar": 0.0})
+            a["tutar"] += t
+        tutarlar = sorted(a["tutar"] for a in alimlar.values() if a["tutar"] > 0)
+        orta = tutarlar[(len(tutarlar) - 1) // 2] if tutarlar else 0.0  # tipik tek alışveriş
+        esik = max(1500.0, 8 * orta)
+        buyuk = [a for a in alimlar.values() if a["tutar"] > esik]
+        gunluk = {}
+        for a in alimlar.values():
+            if a not in buyuk:
+                gunluk[a["gun"]] = gunluk.get(a["gun"], 0) + a["tutar"]
+        return sabit, gunluk_sabit, buyuk, gunluk
+
+    sabit, gunluk_sabit, buyuk, gunluk = ayir(islemler, bas, bit)
+    gunluk_top = sum(gunluk.values())
+    tipik = gunluk_top / gecen if gecen else 0.0
+    buyuk_top = sum(a["tutar"] for a in buyuk)
+    tahmin = sabit + buyuk_top + max(0.0, kalan_sabit) + tipik * (toplam_gun - gecen)
+    sonuc = {"toplam_gun": toplam_gun, "gecen": gecen, "sabit": sabit, "kalan_sabit": max(0.0, kalan_sabit),
+             "buyuk": buyuk_top, "buyuk_adet": len(buyuk), "gunluk_toplam": gunluk_top, "tipik": tipik, "tahmin": tahmin,
+             "gun_gunluk": gunluk, "gun_toplu": {**gunluk_sabit}, "karsilastirma": None}
+    for a in buyuk:
+        sonuc["gun_toplu"][a["gun"]] = sonuc["gun_toplu"].get(a["gun"], 0) + a["tutar"]
+    if onceki:
+        o_bas, _ = hb.butce_donemi(bas, -1)
+        _, _, _, o_gunluk = ayir(onceki, o_bas, o_bas + dt.timedelta(days=gecen - 1))
+        o_top = sum(o_gunluk.values())
+        if o_top > 0:
+            sonuc["karsilastirma"] = (gunluk_top - o_top) / o_top
+    return sonuc

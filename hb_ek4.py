@@ -121,6 +121,7 @@ class EkOzellikler4:
         self.mesaj_hazir = None
         self._yanipsonen = []
         self._yanip_calisiyor = False
+        self.gizli_bugun = 0.0
 
     # ================================================================== yanıp sönen uyarılar
     def yanip_son(self, kontrol, aktif=True):
@@ -510,7 +511,8 @@ class EkOzellikler4:
 
         satirlar = [ft.Row([yazi(f"{t['ad']} ({int(t.get('odenen') or 0) + 1}/{t['toplam_taksit']})", 12.5, expand=True),
                             yazi(hb.tl(t["aylik_tutar"]), 12.5, "sb")]) for t in ts]
-        alanlar = [*satirlar, ft.Divider(), ft.Row([yazi("Toplam", 14, True, expand=True), yazi(hb.tl(toplam), 15, "xb")]), tarih]
+        alanlar = [*satirlar, ft.Divider(), ft.Row([yazi("Toplam", 14, True, expand=True), yazi(hb.tl(toplam), 15, "xb")]),
+                   self.takvimli(tarih, saat=True)]
         if self.yonetici:
             alanlar += [yazi("Hangi kasadan ödendi?", 12, renk=ui.SOLUK), kasa]
         self._girdi_dialog("Taksit ödemesi", alanlar, onay, "Ödedim")
@@ -1055,7 +1057,7 @@ class EkOzellikler4:
             yazi(f"Son ödeme {son.day} {ui.AYLAR_UZUN[son.month - 1]} {ui.GUNLER[son.weekday()]}" if son else
                  "Son ödeme tarihi okunamadı – aşağıya girin", 12, "sb", renk="#c7d2fe" if son else "#fecaca")], spacing=4),
             bgcolor=ui.KASA_ZEMIN, border_radius=18, padding=14)
-        alanlar = [ozet_kart, *bilgi, kart_tf, ft.Row([tutar_tf, son_tf], spacing=8), gelecek_kutu]
+        alanlar = [ozet_kart, *bilgi, kart_tf, tutar_tf, self.takvimli(son_tf), gelecek_kutu]
         if onceki_kutu:
             alanlar.append(onceki_kutu)
         if kapat_cb:
@@ -2059,8 +2061,26 @@ class EkOzellikler4:
     _FATURA_KATEGORI = ("Kira & Aidat & Faturalar", "Kredi Kartı, Kredi Ödemesi & Borç")
 
     def _fatura_odemesi_mi(self, i):
+        """Günlük sınıra sayılmayan toplu ödemeler (fatura, kart, kira/aidat, taksit, birikim, yatırım…)."""
         return (i.get("kategori") in self._FATURA_KATEGORI or (i.get("aciklama") or "") in ("Fatura ödemesi",
-                                                                                              "Kredi kartı taksidi"))
+                                                                                              "Kredi kartı taksidi")
+                or ak.sabit_odeme_mi(i))
+
+    async def gizli_bugunu_yukle(self):
+        """Hatice'de: göremediği (gizli) bugünkü harcamaların yalnızca toplamı. Böylece hanenin günlük sınırı ve
+        kalanı iki telefonda aynı çıkar; kayıtların kendisi ona hiç gelmez."""
+        self.gizli_bugun = 0.0
+        if self.yonetici or self.hane_pid() is not None:
+            return
+        try:
+            r = await self.arka(self.supa.rpc, "hb_gizli_bugun")
+            if isinstance(r, list):
+                r = r[0] if r else 0
+            if isinstance(r, dict):
+                r = next(iter(r.values()), 0)
+            self.gizli_bugun = float(r or 0)
+        except Exception as e:
+            print("Gizli toplam alınamadı:", e)
 
     def gunluk_limit(self, pid=None):
         """Faturalar/taksitler/düzenli ödemeler düşüldükten sonra dönem sonuna kadar günlük harcanabilir tutar.
@@ -2079,12 +2099,14 @@ class EkOzellikler4:
         harcanan = sum(float(i.get("tutar") or 0) for i in self.islemler
                        if i.get("tur") == "Gider" and hb.tarih_yerel(i.get("tarih")).date() == bugun
                        and (pid is None or i.get("kasa_sahibi") == pid) and not self._fatura_odemesi_mi(i))
+        gizli = float(getattr(self, "gizli_bugun", 0) or 0) if pid is None and not self.yonetici else 0.0
+        harcanan += gizli  # Hatice'nin göremediği gizli harcamalar yalnızca toplam olarak
         limit = max(0.0, (serbest + harcanan) / kalan_gun)
         return {"limit": limit, "harcanan": harcanan, "oran": (harcanan / limit) if limit else (1.0 if harcanan else 0.0),
-                "kalan_gun": kalan_gun, "serbest": serbest}
+                "kalan_gun": kalan_gun, "serbest": serbest, "gizli": gizli}
 
     def gunluk_limit_karti(self):
-        pid = None if self.yonetici else self.ben["id"]
+        pid = self.hane_pid()  # hanenin günlük sınırı (Hatice de aynısını görür)
         g = self.gunluk_limit(pid)
         if not g:
             return None
@@ -2094,19 +2116,22 @@ class EkOzellikler4:
         kalan = g["limit"] - g["harcanan"]
         return kart(ft.Column([
             ft.Row([simge_kutusu(ft.Icons.TODAY_ROUNDED, renk, 18, 36),
-                    ft.Column([yazi("Bugün harcayabileceğin", 12, renk=ui.SOLUK),
+                    ft.Column([yazi("Bugün hanece harcanabilecek" if pid is None and len(self.profiller) > 1
+                                    else "Bugün harcayabileceğin", 12, renk=ui.SOLUK),
                                yazi(hb.tl(g["limit"]), 20, "xb")], spacing=0, expand=True),
                     ft.Column([yazi("Kalan" if kalan >= 0 else "Aşım", 11.5, renk=ui.SOLUK),
                                yazi(hb.tl(abs(kalan)), 14.5, "xb", renk=renk)], spacing=0,
                               horizontal_alignment=ft.CrossAxisAlignment.END)], spacing=10),
             _ilerleme(min(oran, 1.0), renk, 8),
-            yazi(f"Bugün {hb.tl(g['harcanan'])} harcandı (%{oran * 100:.0f}) • faturalar ve taksitler düşülünce kalan "
-                 f"{hb.tl(g['serbest'])}, dönem sonuna {g['kalan_gun']} gün", 11, renk=ui.SOLUK)], spacing=8),
+            yazi((f"Bugün sınırın %{oran * 100:.0f}'i kullanıldı" if g.get("gizli") else
+                  f"Bugün {hb.tl(g['harcanan'])} harcandı (%{oran * 100:.0f})") +
+                 f" • faturalar ve taksitler düşülünce kalan {hb.tl(g['serbest'])}, dönem sonuna {g['kalan_gun']} gün",
+                 11, renk=ui.SOLUK)], spacing=8),
             shadow=golge(0.5))
 
     def gunluk_limit_uyar(self):
         """%90'a ulaşınca ve aşılınca günde bir kez uyarır."""
-        pid = None if self.yonetici else self.ben["id"]
+        pid = self.hane_pid()
         g = self.gunluk_limit(pid)
         if not g or not g["harcanan"]:
             return
@@ -2119,7 +2144,8 @@ class EkOzellikler4:
             return
         self._yerel_ayar_yaz(gunluk_uyari={"tarih": bugun, "seviye": seviye})
         if seviye == 2:
-            self.bildir(f"🚨 Günlük harcama sınırı aşıldı: {hb.tl(g['harcanan'])} / {hb.tl(g['limit'])}", GIDER)
+            self.bildir(f"🚨 Günlük harcama sınırı ({hb.tl(g['limit'])}) aşıldı" if g.get("gizli") else
+                        f"🚨 Günlük harcama sınırı aşıldı: {hb.tl(g['harcanan'])} / {hb.tl(g['limit'])}", GIDER)
         else:
             self.bildir(f"⚠️ Günlük harcama sınırının %{g['oran'] * 100:.0f}'ine ulaştınız ({hb.tl(g['limit'])})", "#d97706")
 
@@ -2207,7 +2233,7 @@ class EkOzellikler4:
                 ozet = {"kategori_ortalama": dict(list(ort.items())[:10]),
                         "bu_donem_tahmin": {k: round(bu.get(k, 0) / gecen * toplam_gun) for k in list(ort)[:10]},
                         "duzenli_urunler": [{k: u[k] for k in ("ad", "ort_aralik", "ort_tutar", "aylik")} for u in urunler[:20]]}
-                g = self.gunluk_limit(None if self.yonetici else self.ben["id"])
+                g = self.gunluk_limit(self.hane_pid())
                 if g:
                     ozet["gunluk_limit"] = round(g["limit"])
                 istem = ("Bir ailenin harcama alışkanlıkları özeti (TL) aşağıda. Türkçe, samimi ve somut 5 madde halinde planlı bütçe "

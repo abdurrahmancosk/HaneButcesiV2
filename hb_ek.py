@@ -437,7 +437,7 @@ class EkOzellikler:
             return buton("Sil", sil_et, ft.Icons.DELETE_ROUNDED, tip="text")
 
         self._girdi_dialog("Hedefi düzenle" if h else "Yeni birikim hedefi",
-                           [ad, tutar, tarih] + ([yazi("Kimin kasası?", 12, renk=ui.SOLUK), kasa] if self.yonetici else []),
+                           [ad, tutar, self.takvimli(tarih)] + ([yazi("Kimin kasası?", 12, renk=ui.SOLUK), kasa] if self.yonetici else []),
                            kaydet, ek_eylem=sil if h.get("id") else None)
 
     def hedef_hareket(self, h, yon):
@@ -781,7 +781,7 @@ class EkOzellikler:
                              keyboard_type=ft.KeyboardType.NUMBER)
         tuketim = ft.TextField(label="Tüketim", value=f"{f['tuketim']:g}" if f.get("tuketim") else "", dense=True, expand=True,
                                keyboard_type=ft.KeyboardType.NUMBER)
-        birim = ft.TextField(label="Birim", value=f.get("birim") or "", dense=True, width=90)
+        birim = self.birim_secici(f.get("birim"), width=130)
         so = ft.TextField(label="Son ödeme (GG.AA.YYYY)", dense=True,
                           value=dt.date.fromisoformat(f["son_odeme"]).strftime("%d.%m.%Y") if f.get("son_odeme") else "")
         kasa = self._kasa_secici()
@@ -797,7 +797,7 @@ class EkOzellikler:
             kayit = {"tur": secilen_tur, "kurum": (kurum.value or "").strip() or None, "abone_no": f.get("abone_no"),
                      "donem": (donem.value or "").strip() or None, "fatura_tarihi": f.get("fatura_tarihi"),
                      "son_odeme": hb.tarih_coz(so.value).date().isoformat() if (so.value or "").strip() else None,
-                     "tuketim": hb.tutar_coz(tuketim.value), "birim": (birim.value or "").strip() or None,
+                     "tuketim": hb.tutar_coz(tuketim.value), "birim": (birim.value if birim.value != self.YENI_BIRIM else "") or None,
                      "birim_fiyat": f.get("birim_fiyat"), "tutar": t, "gorsel": gorsel,
                      "kasa_sahibi": kasa.value if self.yonetici else self.ben["id"]}
             if getattr(self, "fatura_kategori_var", True):
@@ -833,7 +833,7 @@ class EkOzellikler:
                                               actions=[buton("Tamam", lambda e: self.dialog_kapat(), tip="text")]))
 
         self._girdi_dialog("Faturayı düzenle" if mevcut else "Faturayı kontrol et",
-                           [tur_satiri, yeni_tur, kart_uyari, kurum, donem, tutar, ft.Row([tuketim, birim], spacing=8), so,
+                           [tur_satiri, yeni_tur, kart_uyari, kurum, donem, tutar, ft.Row([tuketim, birim], spacing=8), self.takvimli(so),
                             kategori] + ([yazi("Kimin kasası?", 12, renk=ui.SOLUK), kasa] if self.yonetici else []), kaydet)
 
     async def ozel_fatura_turu_ekle(self, ad):
@@ -1058,7 +1058,7 @@ class EkOzellikler:
                 self.bildir(f"Kaydedilemedi: {ex}", GIDER)
 
         self._girdi_dialog("Borç verdim" if yon == "verdim" else "Borç aldım",
-                           [kisi, tutar, aciklama, vade, kasaya] + ([kasa] if self.yonetici else []), kaydet)
+                           [kisi, tutar, aciklama, self.takvimli(vade), kasaya] + ([kasa] if self.yonetici else []), kaydet)
 
     def borc_kapat(self, b):
         if self.salt_okunur(b, "borç kaydı"):

@@ -147,10 +147,26 @@ Menü > Abonelikler > (Su aboneliğine dokunun ya da “Abonelik ekle”) → Ku
 - Kart sayfasında sıradaki ödeme, “Ödedim” (eksik ödenirse kalan gelecek ayın tahminine eklenir), 8 aylık yük grafiği ve ödenmiş ekstreler. Elle eklenen taksitler varsa ayrıca görünür; ekstre yüklerken bunlar kapatılabilir (iki kez sayılmasın).
 - **Yanıp sönen uyarı:** Son ödeme günü gelen ya da geçen fatura, kart ekstresi, taksit ve düzenli ödemeler Özet'te, Faturalar'da, Planla'da ve kart sayfasında yanıp söner.
 
-## Sürüm 2.12.1 – Hatice gelirler ve gizlenenler dışında her şeyi görür
-**Önce bir kez (zorunlu):** Supabase > SQL Editor'da `guncelleme_12.sql` içeriğini çalıştırın (`guncelleme_11.sql`'i çalıştırdıysanız da çalıştırmadıysanız da yalnızca bu yeterli). Çalıştırılmazsa Hatice yine yalnızca kendi kasasını görür.
+## Sürüm 2.12.2 – Hatice gelirler ve gizlenenler dışında her şeyi görür (toplam kasa ve günlük sınır dahil)
+**Önce bir kez (zorunlu):** Supabase > SQL Editor'da `guncelleme_13.sql` içeriğini çalıştırın. `guncelleme_11.sql` ve `guncelleme_12.sql`'in içeriği de bu dosyada; onları çalıştırdıysanız da çalıştırmadıysanız da yalnızca bu yeterli. Çalıştırılmazsa Hatice yine yalnızca kendi kasasını görür.
 
-- **Hatice görmez:** gelirler (kendi kasasına kendi girdikleri hariç) ve “Hatice'den gizle” işaretli kayıtlar (fiş görselleri ve hedeflere katkıları dahil). Kasa bakiyeniz ve toplam kasa da ona gösterilmez; Özet'te yalnızca kendi kasası (“KASAM”) görünür.
-- **Hatice görür:** harcamalar ve aktarımlar (İşlemler'de kimin kasası olduğu yazar, kasaya göre süzülebilir), ödenen/ödenecek tüm faturalar ve kart ekstreleri, düzenli ödemeler, taksitler, birikim hedefleri, borç/alacaklar, altın & döviz, abonelikler. Hatırlatmalarda başkasına ait olanın başında sahibinin adı yazar. Özet'te “Hane gideri”, “Benim giderim”, “Kim ne harcadı?”; takvim, kategoriler, bütçe limitleri, yıl özeti ve akıllı bütçe hanenin harcamasıyla hesaplanır. Harçlık bütçesi, günlük sınır ve “gerçekten harcanabilir” yine yalnızca kendi parasına göredir.
-- **Değiştirme yetkisi:** Hatice yalnızca kendi eklediği kayıtları ve kendi kasasına ait olanları öder/düzenler/siler; sizinkileri yalnızca görür (dokununca “yalnızca görüntüleyebilirsiniz” der).
+- **Hatice görmez:** gelirler (kendi kasasına kendi girdikleri hariç) ve “Hatice'den gizle” işaretli kayıtlar (fiş görselleri ve hedeflere katkıları dahil).
+- **Hatice görür:** Özet'te **TOPLAM KASA** ve iki kasanın bakiyesi, “gerçekten harcanabilir” tutar ve **hanenin günlük harcama sınırı** (sizinkiyle aynı rakam); harcamalar ve aktarımlar (İşlemler'de kimin kasası olduğu yazar, kasaya göre süzülebilir), ödenen/ödenecek tüm faturalar ve kart ekstreleri, düzenli ödemeler, taksitler, birikim hedefleri, borç/alacaklar, altın & döviz, abonelikler. Hatırlatmalarda başkasına ait olanın başında sahibinin adı yazar. Takvim, kategoriler, bütçe limitleri, yıl özeti ve akıllı bütçe hanenin harcamasıyla hesaplanır; harçlık bütçesi yalnızca kendisinindir.
+- **Gizli harcamalar ve günlük sınır:** Gizlediğiniz harcamalar Hatice'nin listesinde görünmez, ama günlük sınır iki telefonda aynı çıksın diye bugünkü toplama yalnızca rakam olarak eklenir; o gün gizli harcama varsa Hatice'nin kartında tutar yerine “sınırın %… kullanıldı” yazar.
+- **Değiştirme yetkisi:** Hatice yalnızca kendi eklediği kayıtları ve kendi kasasına ait olanları öder/düzenler/siler; sizinkileri yalnızca görür (dokununca “yalnızca görüntüleyebilirsiniz” der). Sizin kasanızın hareket sayfasını açamaz, kendi kasasınınkini açar.
 - **Hızlı gizle (yalnız sizde):** bir kayda ya da fişe dokunun → **Gizle** / **Göster**. Fişte tüm satırlar birlikte gizlenir. Önceden Hatice sizin kasanızı hiç görmediği için gizlemediğiniz eski harcamalar bu güncellemeyle ona görünür hale gelir; görmesini istemediklerinizi SQL'i çalıştırmadan önce bu düğmeyle gizleyin (ya da SQL dosyasının sonundaki isteğe bağlı satırla eskilerin hepsini birden).
+
+## Sürüm 2.12.3 – e-posta yalnızca 16 Kasım 2026 ve sonrası
+- Gmail'den fatura / alışveriş faturası taraması artık yalnızca **16.11.2026 ve sonraki** e-postalara bakar; daha eski postalar hiç okunmaz, böylece önceden girilmiş faturalar ikinci kez eklenmez.
+
+## Sürüm 2.13.0 – gerçekçi harcama temposu
+- Fatura, kart ekstresi, kira/aidat, taksit, birikim/yatırım ödemeleri ve tek seferlik büyük alışverişler (tipik bir alışverişin 8 katından ve 1.500 ₺'den büyük olanlar, fiş tek alışveriş sayılır) artık “günlük tempo”ya katılmaz.
+- Dönem sonu tahmini = ödenen sabitler + bu dönem kalan bilinen ödemeler (fatura, ekstre, taksit, düzenli) + büyük alışverişler + tipik günlük harcama × kalan gün.
+- Grafikte günlük harcamalar çubuk, toplu ödeme günleri turuncu noktayla gösterilir; geçen dönemin aynı gününe göre karşılaştırma eklenir. Günlük harcama sınırı da aynı toplu ödemeleri saymaz.
+
+## Sürüm 2.13.1 – altın/döviz alışını düzenleme
+- Menü > Altın & döviz > Detay'da her alışın yanında ✏️ var: miktar, birim alış fiyatı (bilmiyorsanız ödediğiniz toplamı yazın, birim fiyat hesaplanır), tarih ve not düzeltilebilir. Alım kasadan düşülmüşse bağlı gider kaydı da yeni tutara göre düzeltilir.
+
+## Sürüm 2.14.0 – takvimden tarih, saatten saat; açılır birim listesi
+- Tüm tarih alanlarının yanında 📅 düğmesi var: takvimden gün seçilir, işlem tarihlerinde ardından saat de sorulur (okul harçlığı saati 🕘 ile). Elle yazmak yine serbest.
+- Miktar artık sayı + açılır birim listesi (adet, kg, gr, lt, ml, paket, kutu, şişe, demet, metre, m³, kWh…). Listenin en altındaki “+ Yeni birim…” ile kalıcı birim eklenir (sizin eklediğiniz birimler iki telefonda da görünür; Hatice'nin eklediği kendi telefonunda kalır). Fatura tüketim birimi de aynı listeden seçilir.

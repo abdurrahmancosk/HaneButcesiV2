@@ -376,7 +376,7 @@ class EkOzellikler3:
                 self.bildir(f"Kaydedilemedi: {ex}", GIDER)
 
         self._girdi_dialog("Yeni alım (kasadan düşer)" if yeni_alim else "Elimdeki varlık (kasayı etkilemez)",
-                           [tur_dd, miktar, fiyat, tarih, aciklama] + ([yazi("Kimin kasası?", 12, renk=ui.SOLUK), kasa]
+                           [tur_dd, miktar, fiyat, self.takvimli(tarih), aciklama] + ([yazi("Kimin kasası?", 12, renk=ui.SOLUK), kasa]
                                                                       if self.yonetici else []), kaydet)
 
     def varlik_sat(self, tur, vs, guncel):
@@ -420,12 +420,91 @@ class EkOzellikler3:
                             yazi(f"{float(v['miktar']):g}", 13, True, width=50),
                             yazi((hb.tl(v["birim_maliyet"]) if v.get("birim_maliyet") else "maliyet yok") +
                                  (f" • {self.ad(v.get('kasa_sahibi'))}" if len(self.profiller) > 1 else ""), 12, expand=True),
-                            ft.IconButton(icon=ft.Icons.DELETE_OUTLINE_ROUNDED, icon_size=18,
-                                          on_click=lambda e, v=v: self.page.run_task(self._varlik_sil, v))
-                            if self.sahip_yetkili(v) else ft.Container(width=40)]) for v in vs]
+                            *([ft.IconButton(icon=ft.Icons.EDIT_ROUNDED, icon_size=18, tooltip="Düzenle",
+                                             on_click=lambda e, v=v: (self.dialog_kapat(), self.varlik_duzenle(v))),
+                               ft.IconButton(icon=ft.Icons.DELETE_OUTLINE_ROUNDED, icon_size=18,
+                                             on_click=lambda e, v=v: self.page.run_task(self._varlik_sil, v))]
+                              if self.sahip_yetkili(v) else [ft.Container(width=40)])]) for v in vs]
         self.dialog_ac(ft.AlertDialog(title=yazi("Alış kayıtları", 16, True),
                                       content=ft.Column(satirlar, tight=True, scroll=ft.ScrollMode.AUTO),
                                       actions=[buton("Kapat", lambda e: self.dialog_kapat(), tip="text")]))
+
+    def varlik_duzenle(self, v):
+        """Alış kaydını düzelt: miktar, birim fiyat (ya da ödenen toplam), tarih, not. Kasadan düşülmüş bir alımsa
+        bağlı gider kaydı da aynı tutara güncellenir."""
+        if self.salt_okunur(v, "varlık"):
+            return
+        ad, birim = ak.VARLIK_TURLERI.get(v["tur"], (v["tur"], ""))[:2]
+        m0 = float(v["miktar"])
+        f0 = float(v["birim_maliyet"]) if v.get("birim_maliyet") else None
+        miktar = ft.TextField(label=f"Miktar ({birim})", value=f"{m0:g}".replace(".", ","),
+                              keyboard_type=ft.KeyboardType.NUMBER)
+        fiyat = ft.TextField(label="Birim alış fiyatı (₺)", value=f"{f0:.2f}".replace(".", ",") if f0 else "",
+                             keyboard_type=ft.KeyboardType.NUMBER)
+        toplam = ft.TextField(label="ya da ödenen toplam tutar (₺)", value=f"{m0 * f0:.2f}".replace(".", ",") if f0 else "",
+                              keyboard_type=ft.KeyboardType.NUMBER)
+        tarih = ft.TextField(label="Alış tarihi (GG.AA.YYYY)",
+                             value=dt.date.fromisoformat(str(v["tarih"])[:10]).strftime("%d.%m.%Y") if v.get("tarih") else "")
+        aciklama = ft.TextField(label="Not (isteğe bağlı)", value=v.get("aciklama") or "")
+        kaynak = {"son": "fiyat"}
+
+        def fiyat_degisti(e):
+            kaynak["son"] = "fiyat"
+            m, f = hb.tutar_coz(miktar.value), hb.tutar_coz(fiyat.value)
+            if m and f:
+                toplam.value = f"{m * f:.2f}".replace(".", ",")
+                try:
+                    toplam.update()
+                except Exception:
+                    pass
+
+        def toplam_degisti(e):
+            kaynak["son"] = "toplam"
+            m, t = hb.tutar_coz(miktar.value), hb.tutar_coz(toplam.value)
+            if m and t:
+                fiyat.value = f"{t / m:.2f}".replace(".", ",")
+                try:
+                    fiyat.update()
+                except Exception:
+                    pass
+        fiyat.on_change = fiyat_degisti
+        miktar.on_change = lambda e: (toplam_degisti(e) if kaynak["son"] == "toplam" else fiyat_degisti(e))
+        toplam.on_change = toplam_degisti
+
+        async def kaydet():
+            m = hb.tutar_coz(miktar.value)
+            t, f = hb.tutar_coz(toplam.value), hb.tutar_coz(fiyat.value)
+            if kaynak["son"] == "toplam" and m and t:
+                f = t / m
+            if not m or m <= 0:
+                self.bildir("Miktarı girin.", GIDER)
+                return False
+            gun = hb.tarih_kesin(tarih.value)
+            kayit = {"miktar": m, "birim_maliyet": round(f, 4) if f else None,
+                     "aciklama": (aciklama.value or "").strip() or None}
+            if gun:
+                kayit["tarih"] = gun.isoformat()
+            try:
+                await self.arka(self.supa.tablo_guncelle, "hb_varliklar", v["id"], kayit)
+                if v.get("islem_id") and f:  # kasadan düşülmüş alım: gider kaydını da düzelt
+                    g = {"tutar": round(m * f, 2), "birim_fiyat": round(f, 4), "miktar": f"{m:g} {birim}",
+                         "urun": f"{m:g} {birim} {ad}"}
+                    if gun:
+                        g["tarih"] = hb.iso_tarih(dt.datetime.combine(gun, dt.time(12, 0), tzinfo=hb.TZ))
+                    await self.arka(self.supa.islem_guncelle, v["islem_id"], g)
+                self.bildir("Alış kaydı güncellendi ✓" + (" (kasadaki gider de düzeltildi)" if v.get("islem_id") and f
+                                                         else ""), GELIR)
+                await self.varliklari_yukle()
+                await self.verileri_yenile()
+            except Exception as ex:
+                self.bildir(f"Kaydedilemedi: {ex}", GIDER)
+                return False
+
+        self._girdi_dialog(f"{ad} alışını düzenle", [
+            miktar, fiyat, toplam, self.takvimli(tarih), aciklama,
+            yazi("Birim fiyatı bilmiyorsanız ödediğiniz toplamı yazın, birim fiyat hesaplanır." +
+                 (" Bu alım kasadan düşülmüş; gider kaydı da yeni tutara göre düzeltilir." if v.get("islem_id") else
+                  " Bu kayıt kasayı etkilemez."), 11, renk=ui.SOLUK)], kaydet, "Kaydet")
 
     async def _varlik_sil(self, v):
         if self.salt_okunur(v, "varlık"):
@@ -640,7 +719,7 @@ class EkOzellikler3:
         self.page.run_task(yukle)
         return kart(ft.Column([yazi("Okul harçlığı otomatiği", 14, True),
                                yazi("Hafta içi okul günlerinde, MEB takvimindeki tatiller hariç, belirlenen saatte gider olarak eklenir.",
-                                    11.5, renk=ui.SOLUK), aktif, ft.Row([cocuk, tutar, saat], spacing=8, wrap=True),
+                                    11.5, renk=ui.SOLUK), aktif, ft.Row([cocuk, tutar, self.takvimli(saat, tarih=False)], spacing=8, wrap=True),
                                yazi("Hangi kasadan?", 12, renk=ui.SOLUK), kasa,
                                buton("Kaydet", kaydet, ft.Icons.SAVE_ROUNDED, tip="tonal")], spacing=8), shadow=golge(0.5))
 
