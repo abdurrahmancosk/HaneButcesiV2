@@ -84,10 +84,8 @@ _AY = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağust
 
 
 def _tarih_al(v) -> str | None:
-    if not v:
-        return None
-    d = hb.tarih_coz(str(v), varsayilan=None) if str(v).strip() else None
-    return d.date().isoformat() if d else None
+    d = hb.tarih_kesin(v)
+    return d.isoformat() if d else None
 
 
 def fatura_analiz_et(gorsel: bytes, mime: str, api_anahtari: str, turler: list[str] | None = None) -> dict:
@@ -986,8 +984,7 @@ Kurallar:
         try:
             return dt.date.fromisoformat(str(x)[:10])
         except Exception:
-            d = hb.tarih_coz(str(x), varsayilan=None) if x else None
-            return d.date() if d else None
+            return hb.tarih_kesin(x)
 
     taksitler = []
     for t in sonuc.get("taksitler") or []:
@@ -1130,39 +1127,62 @@ def mail_faturalari_getir(adres: str, sifre: str, gun: int = 45, gorulen: set | 
     return sonuc
 
 
+ABONELIK_TURLERI = {"Elektrik", "Su", "Doğalgaz", "İnternet", "Telefon", "Aidat", "Kira", "Sigorta"}
+
+
 def mail_fatura_coz(mail: dict, api_anahtari: str, turler: list[str] | None = None) -> dict:
-    """Bir e-postanın (metin + varsa PDF) fatura olup olmadığını ve bilgilerini çıkarır."""
+    """Bir e-postayı sınıflandırır:
+    cesit = 'abonelik' (ödenecek kurum faturası) | 'alisveris' (satın alınmış ürün/hizmet faturası, zaten ödenmiş)
+            | 'ekstre' (kredi kartı hesap özeti) | 'degil' (reklam, dekont, kargo…)."""
     turler = turler or FATURA_TURLERI
     pdf = None
     for _, v in mail.get("pdfler") or []:
         try:
             v = pdf_sifresini_coz(v)
         except PdfSifreli:
-            continue  # şifreli fatura PDF'i: mail metniyle yetinilir
+            continue  # şifreli PDF: mail metniyle yetinilir
         pdf = v
         break
-    istem = f"""Aşağıdaki e-posta bir kurum faturası bildirimi olabilir (elektrik, su, doğalgaz, internet, telefon, aidat, sigorta…).
+    istem = f"""Aşağıdaki e-postayı sınıflandır ve bilgilerini çıkar.
 Kimden: {mail.get('kimden')}
 Konu: {mail.get('konu')}
 Tarih: {mail.get('tarih'):%d.%m.%Y}
 Metin:
 {mail.get('metin') or ''}
-{'(Faturanın PDF hali ekte.)' if pdf else ''}
+{'(PDF eki ekte.)' if pdf else ''}
 YALNIZCA şu JSON'u döndür:
-{{"fatura_mi": true, "ekstre_mi": false, "tur": "{'/'.join(turler)} değerlerinden biri", "kurum": "", "abone_no": "",
-"donem": "Ekim 2026", "fatura_tarihi": "GG.AA.YYYY", "son_odeme": "GG.AA.YYYY", "tutar": 0.0, "tuketim": null, "birim": "",
-"birim_fiyat": null}}
-Kurallar: Reklam, kampanya, ödeme dekontu/makbuz ("ödemeniz alındı"), sipariş, kargo e-postaları fatura DEĞİLDİR → fatura_mi=false.
-Kredi kartı hesap özeti ise ekstre_mi=true, fatura_mi=false. tutar ödenecek toplam tutardır. Bilmediğin alanı null yap, uydurma."""
+{{"cesit": "abonelik | alisveris | ekstre | degil",
+"tur": "{'/'.join(turler)} değerlerinden biri", "kurum": "", "abone_no": "", "donem": "Ekim 2026",
+"fatura_tarihi": "GG.AA.YYYY", "son_odeme": "GG.AA.YYYY", "tutar": 0.0, "tuketim": null, "birim": "", "birim_fiyat": null,
+"urunler": "alışveriş faturasıysa kısa ürün listesi (örn. Philips buharlı ütü)"}}
+Sınıflandırma kuralları (çok önemli):
+- "abonelik": elektrik, su, doğalgaz, internet, sabit/mobil telefon, aidat, kira, sigorta gibi DÜZENLİ hizmet faturası.
+  Bunlarda genelde abone/tesisat/müşteri numarası, fatura dönemi ve SON ÖDEME TARİHİ bulunur ve henüz ödenmemiştir.
+- "alisveris": bir mağazadan, kişiden (şahıs firması) ya da internetten SATIN ALINMIŞ ürün/hizmetin e-arşiv / e-fatura
+  belgesi (ütü, telefon cihazı, market, kıyafet, sipariş…). Bunlar alışverişte ÖDENMİŞTİR; son ödeme tarihi yoktur.
+- "ekstre": kredi kartı hesap özeti. "degil": reklam, kampanya, ödeme dekontu/makbuz ("ödemeniz alındı"), kargo, bülten.
+- Emin değilsen "abonelik" DEME. Belgede açıkça yazmayan alanı null bırak; tarih UYDURMA."""
     j = gemini(istem, api_anahtari, gorsel=pdf, mime="application/pdf") if pdf else gemini(istem, api_anahtari)
-    if not isinstance(j, dict) or not j.get("fatura_mi"):
-        return {"fatura_mi": False, "ekstre_mi": bool(isinstance(j, dict) and j.get("ekstre_mi"))}
+    if not isinstance(j, dict):
+        return {"cesit": "degil"}
+    cesit = str(j.get("cesit") or "degil").strip().lower()
     tutar = hb.tutar_coz(j.get("tutar"))
-    if not tutar:
-        return {"fatura_mi": False, "ekstre_mi": False}
-    return {"fatura_mi": True, "tur": j.get("tur") if j.get("tur") in turler else "Diğer",
-            "kurum": (j.get("kurum") or "").strip() or None, "abone_no": str(j.get("abone_no") or "").strip() or None,
-            "donem": (j.get("donem") or "").strip() or None, "fatura_tarihi": _tarih_al(j.get("fatura_tarihi")),
-            "son_odeme": _tarih_al(j.get("son_odeme")), "tutar": abs(tutar), "tuketim": hb.tutar_coz(j.get("tuketim")),
-            "birim": (j.get("birim") or "").strip() or None, "birim_fiyat": hb.tutar_coz(j.get("birim_fiyat")),
-            "pdf": pdf}
+    tur = j.get("tur") if j.get("tur") in turler else "Diğer"
+    bilgi = {"tur": tur, "kurum": (j.get("kurum") or "").strip() or None,
+             "abone_no": str(j.get("abone_no") or "").strip() or None, "donem": (j.get("donem") or "").strip() or None,
+             "fatura_tarihi": _tarih_al(j.get("fatura_tarihi")), "son_odeme": _tarih_al(j.get("son_odeme")),
+             "tutar": abs(tutar) if tutar else None, "tuketim": hb.tutar_coz(j.get("tuketim")),
+             "birim": (j.get("birim") or "").strip() or None, "birim_fiyat": hb.tutar_coz(j.get("birim_fiyat")),
+             "urunler": (j.get("urunler") or "").strip() or None, "pdf": pdf}
+    if bilgi["abone_no"] and bilgi["abone_no"].lower() in ("null", "none", "-", "0"):
+        bilgi["abone_no"] = None
+    if cesit == "ekstre":
+        return {"cesit": "ekstre", **bilgi}
+    if not tutar or cesit not in ("abonelik", "alisveris"):
+        return {"cesit": "degil"}
+    if cesit == "abonelik":
+        # güvenlik ağı: gerçek bir abonelik faturası tanınır türde olmalı ve abone no ya da son ödeme tarihi taşımalı
+        ozel = tur not in FATURA_TURLERI  # kullanıcının eklediği tür
+        if not (tur in ABONELIK_TURLERI or ozel) or not (bilgi["abone_no"] or bilgi["son_odeme"]):
+            cesit = "alisveris"
+    return {"cesit": cesit, **bilgi}

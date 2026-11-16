@@ -121,6 +121,17 @@ def tarih_coz(metin: str | None, varsayilan: dt.datetime | None = None) -> dt.da
         return varsayilan
 
 
+def tarih_kesin(metin) -> dt.date | None:
+    """Metinden tarih çıkarır; anlaşılamazsa None (asla 'bugün' varsaymaz)."""
+    if not metin or str(metin).strip().lower() in ("null", "none", "gg.aa.yyyy", "yyyy-mm-dd", "-"):
+        return None
+    isaret = dt.datetime(1900, 1, 1, tzinfo=TZ)
+    d = tarih_coz(str(metin), varsayilan=isaret)
+    if d == isaret or not 2000 <= d.year <= 2100:
+        return None
+    return d.date()
+
+
 def tarih_yerel(iso: str | None) -> dt.datetime:
     if not iso:
         return simdi()

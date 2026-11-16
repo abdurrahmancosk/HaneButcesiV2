@@ -5,6 +5,7 @@ Hane Bütçesi v2 – kredi kartı taksitleri, "gerçekten harcanabilir para", h
 import asyncio
 import calendar
 import datetime as dt
+import os
 
 import flet as ft
 
@@ -903,8 +904,10 @@ class EkOzellikler4:
                 self.bildir("Faturaları okumak için Menü > Ayarlar'da Gemini anahtarı gerekli.", GIDER)
             return
         self._mail_calisiyor = True
+        await self._mail_denetimi()
         gorulen = self._mail_gorulen()
         eklenen, ekstreler, hatalar = [], [], 0
+        eslesen_alisveris = bekleyen_alisveris = 0
         try:
             if not sessiz:
                 self.bildir("📧 E-postadaki faturalar kontrol ediliyor…")
@@ -927,14 +930,18 @@ class EkOzellikler4:
                     hatalar += 1
                     continue  # görülmedi say: sonra tekrar denensin
                 gorulen.add(mail["id"])
-                if f.get("ekstre_mi") and mail.get("pdfler"):
+                cesit = f.get("cesit")
+                if cesit == "ekstre" and mail.get("pdfler"):
                     ekstreler.append(mail)
-                    continue
-                if not f.get("fatura_mi"):
-                    continue
-                k = await self._mail_faturasi_kaydet(f, mail)
-                if k:
-                    eklenen.append(k)
+                elif cesit == "alisveris":
+                    if await self._alisveris_faturasi(f, mail):
+                        eslesen_alisveris += 1
+                    else:
+                        bekleyen_alisveris += 1
+                elif cesit == "abonelik":
+                    k = await self._mail_faturasi_kaydet(f, mail)
+                    if k:
+                        eklenen.append(k)
             self._yerel_yaz("mail_gorulen", list(gorulen)[-800:])
             if eklenen:
                 await self.ek_verileri_yenile()
@@ -942,7 +949,12 @@ class EkOzellikler4:
             if ekstreler:
                 self._bekleyen_ekstre = ekstreler[-1]
             sonuc = (f"{len(eklenen)} yeni fatura" if eklenen else "yeni fatura yok") + \
-                    (f", {len(ekstreler)} kart ekstresi" if ekstreler else "") + (f", {hatalar} mail okunamadı" if hatalar else "")
+                    (f", {len(ekstreler)} kart ekstresi" if ekstreler else "") + \
+                    (f", {eslesen_alisveris} alışveriş faturası harcamasına eklendi" if eslesen_alisveris else "") + \
+                    (f", {bekleyen_alisveris} alışveriş faturası onay bekliyor" if bekleyen_alisveris else "") + \
+                    (f", {hatalar} mail okunamadı" if hatalar else "")
+            if bekleyen_alisveris and sessiz:
+                self.bildir(f"🧾 E-postada {bekleyen_alisveris} alışveriş faturası var: Faturalar sayfasından bakın")
             self._yerel_ayar_yaz(mail=dict(self.mail_ayari() or a, son_kontrol=hb.iso_tarih(hb.simdi()), son_sonuc=sonuc))
             if eklenen:
                 odenen = sum(1 for k in eklenen if k.get("odendi"))
@@ -1247,3 +1259,141 @@ class EkOzellikler4:
         elif not sessiz:
             self.bildir("Eşleşen ödeme bulunamadı.")
         return n + eski
+
+
+    # ================================================================== e-postadaki alışveriş faturaları
+    def _mail_alisveris(self):
+        return self._yerel_oku("mail_alisveris") or []
+
+    async def _alisveris_faturasi(self, f, mail):
+        """Satın alma faturası: kayıtlı harcamayla eşleşirse PDF'i ona eklenir; yoksa onaya bırakılır.
+        Dönüş: True = harcamayla eşleşti."""
+        tutar = float(f.get("tutar") or 0)
+        gun = hb.tarih_kesin(f.get("fatura_tarihi")) or mail["tarih"].date()
+        pay = max(1.0, tutar * 0.01)
+        q = hb.urllib.parse.quote
+        b1 = hb.iso_tarih(dt.datetime.combine(gun - dt.timedelta(days=10), dt.time(), hb.TZ))
+        b2 = hb.iso_tarih(dt.datetime.combine(gun + dt.timedelta(days=10), dt.time(), hb.TZ))
+        try:
+            adaylar = await self.arka(self.supa.tablo, "hb_islemler",
+                                      f"select=id,tutar,tarih,urun,firma,fis_gorsel,aciklama&tur=eq.Gider"
+                                      f"&tutar=gte.{tutar - pay:.2f}&tutar=lte.{tutar + pay:.2f}"
+                                      f"&tarih=gte.{q(b1)}&tarih=lt.{q(b2)}&limit=20")
+        except Exception:
+            adaylar = []
+        adaylar = [a for a in adaylar if abs(float(a.get("tutar") or 0) - tutar) <= pay]
+        if adaylar:
+            a = min(adaylar, key=lambda a: (abs(float(a["tutar"]) - tutar), abs((hb.tarih_yerel(a["tarih"]).date() - gun).days)))
+            guncelle = {}
+            if not a.get("fis_gorsel") and f.get("pdf"):
+                try:
+                    guncelle["fis_gorsel"] = await self.arka(self.supa.fis_yukle, f["pdf"], "pdf", "application/pdf")
+                except Exception:
+                    pass
+            if not a.get("firma") and f.get("kurum"):
+                guncelle["firma"] = f["kurum"]
+            if guncelle:
+                try:
+                    await self.arka(self.supa.islem_guncelle, a["id"], guncelle)
+                except Exception as ex:
+                    print("Alışveriş faturası harcamaya eklenemedi:", ex)
+            return True
+        # onaya bırak (PDF yerelde saklanır)
+        liste = [x for x in self._mail_alisveris() if x.get("id") != mail["id"]]
+        yol = None
+        if f.get("pdf") and len(f["pdf"]) < 3_000_000:
+            yol = os.path.join(hb.veri_klasoru(), f"mail_{mail['id']}.pdf")
+            try:
+                with open(yol, "wb") as fp:
+                    fp.write(f["pdf"])
+            except Exception:
+                yol = None
+        liste.append({"id": mail["id"], "kurum": f.get("kurum") or mail.get("kimden"), "tutar": tutar,
+                      "tarih": gun.isoformat(), "urunler": f.get("urunler"), "konu": mail.get("konu"), "pdf": yol})
+        self._yerel_yaz("mail_alisveris", liste[-30:])
+        return False
+
+    def alisveris_faturalari_karti(self):
+        liste = self._mail_alisveris()
+        if not liste:
+            return None
+        satirlar = []
+        for x in liste[-8:][::-1]:
+            satirlar.append(ft.Container(content=ft.Column([
+                ft.Row([ft.Column([yazi(x.get("kurum") or "Satıcı", 13, "sb"),
+                                   yazi(" • ".join(y for y in [x.get("urunler"), hb.tarih_kesin(x.get("tarih")).strftime("%d.%m.%Y")
+                                                               if hb.tarih_kesin(x.get("tarih")) else None] if y), 11,
+                                        renk=ui.SOLUK, max_lines=2)], spacing=0, expand=True),
+                        yazi(hb.tl(x["tutar"]), 13.5, "xb")], spacing=8),
+                ft.Row([buton("Harcama olarak ekle", lambda e, x=x: self.alisveris_faturasi_ekle(x), ft.Icons.ADD_ROUNDED,
+                              tip="text"),
+                        buton("Yoksay", lambda e, x=x: self.alisveris_faturasi_kaldir(x), tip="text")],
+                       alignment=ft.MainAxisAlignment.END, spacing=0)], spacing=2),
+                bgcolor=ui.ZEMIN2, border_radius=14, padding=ft.Padding(12, 8, 6, 2)))
+        return kart(ft.Column([
+            ft.Row([ft.Icon(ft.Icons.SHOPPING_BAG_ROUNDED, color="#0891b2"),
+                    yazi(f"E-postadaki alışveriş faturaları ({len(liste)})", 14, True, expand=True)]),
+            yazi("Bunlar ödenecek fatura değil; satın aldığınız ürünlerin e-faturaları. Kayıtlı bir harcamayla eşleşmedikleri "
+                 "için size soruluyor: harcama olarak eklemediyseniz ekleyin, eklediyseniz yoksayın.", 11.5, renk=ui.SOLUK),
+            *satirlar], spacing=8), shadow=golge(0.5))
+
+    def alisveris_faturasi_kaldir(self, x):
+        self._yerel_yaz("mail_alisveris", [y for y in self._mail_alisveris() if y.get("id") != x.get("id")])
+        if x.get("pdf"):
+            try:
+                os.remove(x["pdf"])
+            except Exception:
+                pass
+        self.ekrani_ciz()
+
+    def alisveris_faturasi_ekle(self, x):
+        kat = acilir("Kategori", self.kategoriler, "Diğer")
+        urun = ft.TextField(label="Ürün / açıklama", value=x.get("urunler") or "", dense=True)
+        kasa = self._kasa_secici()
+
+        async def kaydet():
+            gorsel = None
+            if x.get("pdf"):
+                try:
+                    with open(x["pdf"], "rb") as fp:
+                        gorsel = await self.arka(self.supa.fis_yukle, fp.read(), "pdf", "application/pdf")
+                except Exception:
+                    gorsel = None
+            gun = hb.tarih_kesin(x.get("tarih")) or hb.simdi().date()
+            kayit = {"tur": "Gider", "tutar": float(x["tutar"]), "tarih": hb.iso_tarih(dt.datetime.combine(gun, dt.time(12), hb.TZ)),
+                     "firma": x.get("kurum"), "urun": (urun.value or "").strip() or None, "kategori": kat.value or "Diğer",
+                     "kasa_sahibi": kasa.value if self.yonetici else self.ben["id"], "hedef_kasa": None,
+                     "fis_gorsel": gorsel, "aciklama": "E-postadaki e-faturadan"}
+            if self.yonetici:
+                kayit["gizli"] = self.gizli_varsayilan
+            if await self.kayit_ekle([kayit]):
+                self.bildir("Harcama eklendi ✓", GELIR)
+            self.alisveris_faturasi_kaldir(x)
+            await self.verileri_yenile(ciz=False)
+            self.ekrani_ciz()
+
+        self._girdi_dialog(f"{x.get('kurum') or 'Alışveriş'} – {hb.tl(x['tutar'])}", [urun, kat] + (
+            [yazi("Hangi kasadan ödendi?", 12, renk=ui.SOLUK), kasa] if self.yonetici else []), kaydet, "Ekle")
+
+    async def _mail_denetimi(self):
+        """v2.8.1 öncesi e-postadan eklenen, abone numarası olmayan 'faturalar' (alışveriş e-faturası olabilir) silinir ve
+        yeni sınıflandırmayla yeniden değerlendirilmek üzere tekrar taranır (bir kez)."""
+        if self._yerel_ayar().get("mail_denetim_282"):
+            return
+        gorulen = self._mail_gorulen()
+        silinen = 0
+        for f in list(self.ek.get("faturalar", [])):
+            if not f.get("mail_id") or f.get("abone_no") or not f.get("id"):
+                continue
+            try:
+                await self.arka(self.supa.tablo_sil, "hb_faturalar", f["id"])
+                gorulen.discard(str(f["mail_id"]).replace("gmail:", ""))
+                silinen += 1
+            except Exception as ex:
+                print("Denetim: fatura silinemedi:", ex)
+                return
+        self._yerel_yaz("mail_gorulen", list(gorulen))
+        self._yerel_ayar_yaz(mail_denetim_282=True)
+        if silinen:
+            await self.ek_verileri_yenile()
+            self.bildir(f"🔎 E-postadan yanlışlıkla fatura sayılan {silinen} kayıt kaldırıldı; yeniden değerlendirilecek")

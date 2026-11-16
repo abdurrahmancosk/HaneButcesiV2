@@ -480,6 +480,10 @@ class EkOzellikler:
             bgcolor=ui.KART, border_radius=16, padding=ft.Padding(12, 8, 6, 8), border=ui.kenar() if ui.KOYU else None,
             on_click=(lambda e: self.menu_ac("abonelikler")) if mail.get("sifre") else (lambda e: self.menu_ac("ayarlar"))))
 
+        ak_kart = self.alisveris_faturalari_karti()
+        if ak_kart:
+            ogeler.append(ak_kart)
+
         # Düzenli ödemeler
         ay = hb.simdi().strftime("%Y-%m")
         ogeler.append(ft.Row([yazi("Düzenli ödemeler", 16, True, expand=True),
