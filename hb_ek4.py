@@ -6,6 +6,7 @@ import asyncio
 import calendar
 import datetime as dt
 import os
+import re
 
 import flet as ft
 
@@ -29,6 +30,21 @@ def taksit_takvimi(t: dict, ay_sayisi: int = 6) -> list[tuple[dt.date, float]]:
     for n in range(max(0, min(kalan, ay_sayisi + 2))):
         sonuc.append((taksit_vade(dict(t, odenen=int(t.get("odenen") or 0) + n)), float(t["aylik_tutar"])))
     return sonuc
+
+
+def abone_ayni(a, b) -> bool:
+    """Abone / tesisat / telefon numaralarını biçimden bağımsız karşılaştırır (0535…, +90 535…, 535 085 90 52 aynı)."""
+    if not a or not b:
+        return False
+    da, db = re.sub(r"\D", "", str(a)), re.sub(r"\D", "", str(b))
+    if da and db:
+        da, db = da.lstrip("0"), db.lstrip("0")
+        if da.startswith("90") and len(da) == 12:
+            da = da[2:]
+        if db.startswith("90") and len(db) == 12:
+            db = db[2:]
+        return da == db
+    return hb.urun_anahtari(str(a)) == hb.urun_anahtari(str(b))
 
 
 class EkOzellikler4:
@@ -977,7 +993,7 @@ class EkOzellikler4:
                 return None
         abone = None
         for ab in self.ek.get("abonelikler", []):
-            if f.get("abone_no") and ab.get("abone_no") and hb.urun_anahtari(ab["abone_no"]) == hb.urun_anahtari(f["abone_no"]):
+            if abone_ayni(f.get("abone_no"), ab.get("abone_no")):
                 abone = ab
                 break
         if abone is None:
@@ -1019,7 +1035,7 @@ class EkOzellikler4:
         if not sonuc:
             return None  # başka cihaz eklemiş
         self.ek.setdefault("faturalar", []).insert(0, sonuc[0] if isinstance(sonuc[0], dict) else kayit)
-        if f.get("abone_no") and not any(hb.urun_anahtari(ab.get("abone_no") or "") == hb.urun_anahtari(f["abone_no"])
+        if f.get("abone_no") and not any(abone_ayni(ab.get("abone_no"), f["abone_no"])
                                          for ab in self.ek.get("abonelikler", [])):
             try:
                 gun = dt.date.fromisoformat(f["fatura_tarihi"]).day if f.get("fatura_tarihi") else mail["tarih"].day
@@ -1059,7 +1075,7 @@ class EkOzellikler4:
     # ================================================================== abonelikler
     def abonelik_faturasi(self, ab):
         for f in self.ek.get("faturalar", []):
-            if ab.get("abone_no") and f.get("abone_no") and hb.urun_anahtari(f["abone_no"]) == hb.urun_anahtari(ab["abone_no"]):
+            if abone_ayni(f.get("abone_no"), ab.get("abone_no")):
                 return f
             if not ab.get("abone_no") and f.get("tur") == ab.get("tur"):
                 return f
@@ -1490,7 +1506,7 @@ class EkOzellikler4:
         ab.update(son_sorgu=r["zaman"], son_borc=r["toplam"], son_bilgi=bilgi)
         # kurumda borç yoksa, uygulamada "ödenmedi" duran o aboneliğin faturaları ödenmiştir
         bekleyen = [f for f in self.ek.get("faturalar", []) if not f.get("odendi") and f.get("id")
-                    and ((ab.get("abone_no") and f.get("abone_no") == ab.get("abone_no"))
+                    and (abone_ayni(f.get("abone_no"), ab.get("abone_no"))
                          or (not f.get("abone_no") and f.get("tur") == ab.get("tur")))]
         kapanan = 0
         if r["borc_yok"] and bekleyen:

@@ -1161,6 +1161,8 @@ Sınıflandırma kuralları (çok önemli):
 - "alisveris": bir mağazadan, kişiden (şahıs firması) ya da internetten SATIN ALINMIŞ ürün/hizmetin e-arşiv / e-fatura
   belgesi (ütü, telefon cihazı, market, kıyafet, sipariş…). Bunlar alışverişte ÖDENMİŞTİR; son ödeme tarihi yoktur.
 - "ekstre": kredi kartı hesap özeti. "degil": reklam, kampanya, ödeme dekontu/makbuz ("ödemeniz alındı"), kargo, bülten.
+- abone_no: abone / tesisat / müşteri / hizmet numarası; GSM ya da ev interneti faturasında faturası kesilen telefon veya
+  hizmet numarası (örn. 5xx xxx xx xx, 00177…).
 - Emin değilsen "abonelik" DEME. Belgede açıkça yazmayan alanı null bırak; tarih UYDURMA."""
     j = gemini(istem, api_anahtari, gorsel=pdf, mime="application/pdf") if pdf else gemini(istem, api_anahtari)
     if not isinstance(j, dict):
