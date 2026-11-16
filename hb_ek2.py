@@ -87,7 +87,7 @@ class EkOzellikler2:
             self.bildirimler.insert(0, kayit)
         self.bildir(f"{kayit.get('baslik')}" + (f" — {kayit['metin']}" if kayit.get("metin") else ""))
         if self.sekme == 0 or (self.sekme == 4 and self.alt_sayfa == "bildirimler"):
-            self.ekrani_ciz()
+            self.ekrani_ciz(_koru=True)
 
     def zil_dugmesi(self):
         n = self.okunmamis

@@ -14,7 +14,7 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.14.0"
+SURUM = "2.15.0"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler
@@ -568,7 +568,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
     def donem(self):
         return hb.butce_donemi(ofset=self.donem_ofset)
 
-    async def verileri_yenile(self, ciz=True):
+    async def verileri_yenile(self, ciz=True, sessiz=False):
+        """sessiz: arka plan yenilemesi – veri değişmediyse ekranı yeniden çizme, değiştiyse kaydırma yerini koru."""
         bas, bit = self.donem
         try:
             self.islemler, self.bakiyeler, _, _ = await asyncio.gather(
@@ -602,7 +603,13 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                 self.bildir(f"Veriler alınamadı: {e}", GIDER)
         if ciz and (self.sekme in (0, 1, 5) or (self.sekme == 4 and self.alt_sayfa in
                                              ("faturalar", "alisveris", "butceler", "hedefler", "borclar", "varliklar", "taksitler"))):
-            self.ekrani_ciz()
+            if sessiz:
+                imza = self.veri_imzasi()
+                if imza is not None and imza == getattr(self, "_son_imza", None):
+                    return
+                if self._klavye_acik_mi():
+                    return  # yazı yazılırken (arama vb.) ekranı değiştirme; sonraki yenilemede çizilir
+            self.ekrani_ciz(_koru=sessiz)
 
     async def canli_degisiklik(self, veri: dict):
         kayit = veri.get("record") or {}
@@ -628,7 +635,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         self._yenileme_planli = True
         await asyncio.sleep(0.8)  # fişten gelen çoklu satırları tek yenilemede topla
         self._yenileme_planli = False
-        await self.verileri_yenile()
+        await self.verileri_yenile(sessiz=True)
         if self._yeni_bildirimler:
             y = self._yeni_bildirimler
             self._yeni_bildirimler = []
@@ -641,14 +648,14 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                 self.bildir(f"🔔 {kim} {len(y)} kayıt ekledi • {hb.tl(toplam)}")
 
     async def canli_durum(self, bagli: bool):
-        if self.sekme == 0:
-            self.ekrani_ciz()
+        if self.sekme == 0 and not self._klavye_acik_mi():
+            self.ekrani_ciz(_koru=True)
 
     async def periyodik_yenile(self, nesil):
         while self.ben and nesil == self._nesil:
             await asyncio.sleep(20 if not (self.canli and self.canli.bagli) else 120)
             if self.ben and (self.sekme in (0, 1) or self.bekleyenler or self.cevrimdisi):
-                await self.verileri_yenile()
+                await self.verileri_yenile(sessiz=True)
 
     # ------------------------------------------------------------ gezinme
     async def sekme_degisti(self, e):
@@ -665,7 +672,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         self.ekrani_ciz()
 
 
-    def ekrani_ciz(self, **kw):
+    def ekrani_ciz(self, _koru=False, **kw):
         if getattr(self, "_kamera_acik", False):
             return  # kamera açıkken arka plan yenilemeleri ekranı bozmasın
         if not self.ben or not getattr(self, "_hazir", False):
@@ -674,16 +681,26 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                      self.planla_ekrani]
         self.page.bgcolor = ui.ARKA
         self._yanipsonen = []  # yanıp sönen uyarılar her çizimde yeniden toplanır
+        ekran = self._ekran_anahtari()
+        eski = getattr(self, "_kaydirma", None)
+        konum = eski[1] if _koru and eski and eski[0] == ekran else 0
+        if not _koru:
+            self._yazi_odak = False
+        self._kaydirma = (ekran, konum)
+        lv = None
         try:
             self.govde.content = ciziciler[self.sekme](**kw)
             self._yanip_kok = self.govde.content
             if self.sekme in (0, 1, 4, 5):
-                self.yenileme_bagla(self.govde.content)
+                lv = self.yenileme_bagla(self.govde.content)
         except Exception as e:
             import traceback
             traceback.print_exc()
             self.govde.content = ft.ListView(padding=16, controls=[yazi(f"Ekran hatası: {e}", renk=GIDER)])
         self.guncelle()
+        self._son_imza = self.veri_imzasi()
+        if konum > 0 and lv is not None:
+            self.liste_kaydir(lv, konum)  # arka plan yenilemesi kullanıcıyı en üste atmasın
 
     def donem_cubugu(self):
         bas, bit = self.donem
@@ -1073,12 +1090,16 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
 
         arama = ft.TextField(value=self.filtre["arama"], hint_text="Ürün, market, kategori, kişi ara…",
                              prefix_icon=ft.Icons.SEARCH_ROUNDED, on_change=arama_degisti, bgcolor=ui.KART,
-                             border_radius=16, border_color="transparent", dense=True)
+                             border_radius=16, border_color="transparent", dense=True,
+                             on_focus=lambda e: setattr(self, "_yazi_odak", True),
+                             on_blur=lambda e: setattr(self, "_yazi_odak", False))
         doldur()
         ust = [self.donem_cubugu(), ft.Container(content=arama, shadow=golge(0.4), border_radius=16), cipler]
         if len(self.profiller) > 1:
             ust.append(kasa_cipleri)
-        return ft.ListView(padding=16, spacing=10, expand=True, controls=ust + [liste, ft.Container(height=70)])
+        lv = ft.ListView(padding=16, spacing=10, expand=True, controls=ust + [liste, ft.Container(height=70)])
+        return ft.Stack([lv, ft.Container(content=self.kaydirma_dugmeleri(lambda: lv), right=12, bottom=86)],
+                        expand=True)
 
     def fis_karti(self, satirlar, tarih_goster=True):
         ilk = satirlar[0]

@@ -5,6 +5,7 @@ Hane Bütçesi v2 – kredi kartı taksitleri, "gerçekten harcanabilir para", h
 import asyncio
 import calendar
 import datetime as dt
+import inspect
 import json
 import os
 import re
@@ -852,7 +853,7 @@ class EkOzellikler4:
         if self.sekme == 4 and self.alt_sayfa == "sohbet":
             self.ekrani_ciz()
         elif self.sekme == 0:
-            self.ekrani_ciz()
+            self.ekrani_ciz(_koru=True)
 
 
     # ================================================================== kart ekstresi
@@ -1162,14 +1163,18 @@ class EkOzellikler4:
             return None
 
         lv = bul(kok)
+        self._aktif_liste = lv
         if lv is None or getattr(lv, "_cek_bagli", False):
-            return
+            return lv
         durum = {"cekme": 0.0}
+        ekran = self._ekran_anahtari()
 
         def kaydirma(e):
             tur = str(getattr(e, "event_type", None) or getattr(e, "type", "") or "").lower()
             px = float(getattr(e, "pixels", 0) or 0)
             ov = float(getattr(e, "overscroll", 0) or 0)
+            if px >= 0 and self._ekran_anahtari() == ekran:
+                self._kaydirma = (ekran, px)  # arka plan yenilemesinde aynı yere dönmek için
             if "start" in tur or "end" in tur:
                 durum["cekme"] = 0.0
                 return
@@ -1184,6 +1189,56 @@ class EkOzellikler4:
             lv._cek_bagli = True
         except Exception:
             pass
+        return lv
+
+    def _klavye_acik_mi(self):
+        return bool(getattr(self, "_yazi_odak", False))
+
+    def _ekran_anahtari(self):
+        return (self.sekme, self.alt_sayfa if self.sekme == 4 else None)
+
+    def liste_kaydir(self, lv, konum, sure=0):
+        """ListView'i verilen yere kaydırır (konum -1: en sona). Flet'in eski/yeni sürümleriyle uyumlu."""
+        if lv is None:
+            return
+        try:
+            r = lv.scroll_to(offset=konum, duration=sure)
+        except TypeError:
+            try:
+                r = lv.scroll_to(konum, sure)
+            except Exception as e:
+                print("Kaydırılamadı:", e)
+                return
+        except Exception as e:
+            print("Kaydırılamadı:", e)
+            return
+        if inspect.isawaitable(r):
+            async def _bekle():
+                try:
+                    await r
+                except Exception as e:
+                    print("Kaydırılamadı:", e)
+            self.page.run_task(_bekle)
+
+    def kaydirma_dugmeleri(self, liste_al):
+        """Uzun listelerde sağ altta 'en başa / en sona' düğmeleri (eski uygulamadaki gibi)."""
+        def dugme(ikon, ipucu, konum):
+            return ft.Container(content=ft.Icon(ikon, size=22, color="#ffffff"), width=40, height=40,
+                                border_radius=20, bgcolor="#99334155", alignment=ui.ORTA,
+                                tooltip=ipucu, on_click=lambda e: self.liste_kaydir(liste_al(), konum, 350))
+        return ft.Column([dugme(ft.Icons.KEYBOARD_DOUBLE_ARROW_UP_ROUNDED, "En başa", 0),
+                          dugme(ft.Icons.KEYBOARD_DOUBLE_ARROW_DOWN_ROUNDED, "En sona", -1)], spacing=8, tight=True)
+
+    def veri_imzasi(self):
+        """Arka plan yenilemesinde veri değişmediyse ekran yeniden çizilmesin (kaydırma yeri korunsun)."""
+        try:
+            return hash(json.dumps([self.islemler, self.bakiyeler, self.ek, getattr(self, "gizli_bugun", None),
+                                    self.cevrimdisi, len(self.bekleyenler or []),
+                                    sum(1 for b in (getattr(self, "bildirimler", None) or []) if not b.get("okundu")),
+                                    len(self.tum_islemler or []) if self.tum_zamanlar else -1],
+                                   sort_keys=True, default=str))
+        except Exception:
+            return None
 
     async def cekip_yenile(self, e=None):
         import time as _t
@@ -2276,3 +2331,135 @@ class EkOzellikler4:
             await self.ek_verileri_yenile()
         except Exception as ex:
             self.bildir(f"Eklenemedi: {ex}", GIDER)
+
+    # ================================================================== ek ders tahmini (yalnızca yönetici)
+    def ek_ders_ayari(self):
+        return {**ak.EK_DERS_VARSAYILAN, **(self._yerel_ayar().get("ek_ders") or {})}
+
+    def _ek_ders_kaydet(self, a):
+        self._yerel_ayar_yaz(ek_ders=a)
+
+    def _ek_ders_ay(self, ofset=0):
+        b = hb.simdi().date()
+        y, m = b.year, b.month + ofset
+        while m < 1:
+            y, m = y - 1, m + 12
+        while m > 12:
+            y, m = y + 1, m - 12
+        return y, m
+
+    def ek_ders_karti(self, kompakt=False):
+        """Bu ayın tahmini ek dersi: pansiyon nöbet sayısı girilince aylık muhtemel gelir hesaplanır (gelecek ayın 5–8'i)."""
+        if not self.yonetici:
+            return None
+        durum = {"ofset": 0}
+        kutu = ft.Column(spacing=8)
+
+        def sa(x):
+            return f"{x:g}".replace(".", ",")
+
+        def ciz():
+            a = self.ek_ders_ayari()
+            y, m = self._ek_ders_ay(durum["ofset"])
+            r = ak.ek_ders_tahmini(a, y, m, self.ek.get("tatiller") or None)
+            ay_adi = f"{ui.AYLAR_UZUN[m - 1]} {y}"
+            od = r["odeme_bas"]
+            odeme = f"{r['odeme_bas'].day}–{r['odeme_bit'].day} {ui.AYLAR_UZUN[od.month - 1]}"
+
+            def nobet(n):
+                a2 = self.ek_ders_ayari()
+                nb = dict(a2.get("nobetler") or {})
+                nb[f"{y}-{m:02d}"] = max(0, int(nb.get(f"{y}-{m:02d}", 0) or 0) + n)
+                a2["nobetler"] = nb
+                self._ek_ders_kaydet(a2)
+                ciz()
+                self.guncelle()
+
+            def ay_degis(n):
+                durum["ofset"] += n
+                ciz()
+                self.guncelle()
+
+            detay = (f"{r['okul_gunu']} okul günü × haftalık {sa(r['haftalik'])} saat = {sa(r['saat_ders'])} sa"
+                     + (f" • ara tatil {r['ara_tatil_gunu']} gün = {sa(r['saat_ara'])} sa" if r["ara_tatil_gunu"] else "")
+                     + (f" • pansiyon {r['pansiyon']} × {sa(a['pansiyon_saat'])} = {sa(r['saat_pansiyon'])} sa" if r["pansiyon"] else ""))
+            kutu.controls = [
+                ft.Row([simge_kutusu(ft.Icons.SCHOOL_ROUNDED, GELIR, 18, 36),
+                        ft.Column([yazi("Tahmini ek ders", 15, True),
+                                   yazi(f"{ay_adi} • {odeme} arası yatar", 11.5, renk=ui.SOLUK)], spacing=0, expand=True),
+                        ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_size=20, tooltip="Ek ders ayarları",
+                                      on_click=lambda e: self.ek_ders_ayar_dialog(lambda: (ciz(), self.guncelle())))],
+                       spacing=10),
+                ft.Row([ft.IconButton(icon=ft.Icons.CHEVRON_LEFT_ROUNDED, icon_size=20, on_click=lambda e: ay_degis(-1)),
+                        ft.Column([yazi(hb.tl(r["net"]), 24, "xb", renk=GELIR),
+                                   yazi(f"{sa(r['saat'])} saat • brüt {hb.tl(r['brut'])}", 11.5, renk=ui.SOLUK)],
+                                  spacing=0, expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.IconButton(icon=ft.Icons.CHEVRON_RIGHT_ROUNDED, icon_size=20, on_click=lambda e: ay_degis(1))]),
+                ft.Container(content=ft.Row([
+                    yazi("Pansiyon nöbeti", 13, "sb", expand=True),
+                    ft.IconButton(icon=ft.Icons.REMOVE_CIRCLE_OUTLINE_ROUNDED, icon_size=24, on_click=lambda e: nobet(-1)),
+                    yazi(str(r["pansiyon"]), 18, "xb"),
+                    ft.IconButton(icon=ft.Icons.ADD_CIRCLE_OUTLINE_ROUNDED, icon_size=24, icon_color=GELIR,
+                                  on_click=lambda e: nobet(1))], spacing=2),
+                    bgcolor=saydam(GELIR, "14"), border_radius=12, padding=ft.Padding(10, 0, 4, 0)),
+                yazi(f"Her nöbet ≈ +{hb.tl(r['pansiyon_net'])} (net)", 11.5, renk=ui.SOLUK),
+            ]
+            if not kompakt:
+                kutu.controls += [
+                    yazi(detay, 11.5, renk=ui.SOLUK),
+                    yazi(f"Saat ücreti brüt {hb.tl(r['brut_saat'])} • gelir vergisi %{sa(a['gv_orani'])} "
+                         f"({hb.tl(r['gv'])}) • damga {hb.tl(r['dv'])}. ozkansoft.com EDUHEP 2026 ile aynı hesap; "
+                         "kesin tutar okulunuzun bordrosundadır.", 10.5, renk=ui.SOLUK),
+                    buton("Yattı – gelir olarak ekle", lambda e: self._ek_ders_gelir_ekle(r), ft.Icons.ADD_ROUNDED,
+                          tip="tonal")]
+
+        ciz()
+        return kart(kutu, shadow=golge(0.5))
+
+    def _ek_ders_gelir_ekle(self, r):
+        tur = next((t for t in self.gelir_turleri if "ek ders" in t.lower()), None) or \
+            next((t for t in self.gelir_turleri if "ek gelir" in t.lower()), None)
+        self.sekme = 2
+        self.ekrani_ciz(tur="Gelir", duzenlenen={
+            "tur": "Gelir", "tutar": r["net"], "kategori": tur, "firma": "MEB", "tarih": hb.iso_tarih(hb.simdi()),
+            "urun": f"Ek Ders ({ui.AYLAR_UZUN[r['ay'] - 1]})", "aciklama": "Tahmini tutar – bordrodaki net tutarla düzeltin"})
+        self.alt_menu_ciz()
+
+    def ek_ders_ayar_dialog(self, sonra=None):
+        a = self.ek_ders_ayari()
+
+        def alan(etiket, anahtar, ipucu=None):
+            v = a.get(anahtar)
+            return ft.TextField(label=etiket, value="" if v is None else ("%s" % (int(v) if float(v).is_integer() else v)).replace(".", ","), dense=True,
+                                keyboard_type=ft.KeyboardType.NUMBER, helper_text=ipucu)
+        y, m = self._ek_ders_ay()
+        alanlar = {
+            "ders": alan("Haftalık derse giriş (saat)", "ders"),
+            "maas_karsiligi": alan("Maaş karşılığı (saat)", "maas_karsiligi"),
+            "hazirlik": alan("Hazırlık ve planlama (haftalık saat)", "hazirlik"),
+            "okul_nobeti": alan("Okul nöbeti (haftalık saat)", "okul_nobeti"),
+            "kulup": alan("Kulüp (haftalık saat)", "kulup"),
+            "pansiyon_saat": alan("1 pansiyon nöbeti kaç saat?", "pansiyon_saat"),
+            "ara_tatil_gunluk": alan("Ara tatilde günlük ödenen saat", "ara_tatil_gunluk"),
+            "gv_orani": alan("Gelir vergisi oranı (%)", "gv_orani", "Yıl içinde %15 → %20'ye çıkabilir; bordronuza bakın"),
+            "brut": alan("Brüt saat ücreti (₺) – boş: otomatik", "brut",
+                         f"Otomatik: {ak.ek_ders_brut(y, m):.4f} ₺ (ozkansoft EDUHEP)"),
+        }
+
+        def kaydet():
+            yeni = dict(a)
+            for k, tf in alanlar.items():
+                v = (tf.value or "").strip()
+                if not v:
+                    yeni[k] = None if k == "brut" else ak.EK_DERS_VARSAYILAN[k]
+                    continue
+                n = hb.tutar_coz(v)
+                if n is None or n < 0:
+                    self.bildir(f"Geçersiz sayı: {tf.label}", GIDER)
+                    return False
+                yeni[k] = n
+            self._ek_ders_kaydet(yeni)
+            self.bildir("Ek ders ayarları kaydedildi ✓", GELIR)
+            if sonra:
+                sonra()
+        self._girdi_dialog("Ek ders ayarları", list(alanlar.values()), kaydet)

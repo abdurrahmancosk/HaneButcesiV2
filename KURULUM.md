@@ -170,3 +170,8 @@ Menü > Abonelikler > (Su aboneliğine dokunun ya da “Abonelik ekle”) → Ku
 ## Sürüm 2.14.0 – takvimden tarih, saatten saat; açılır birim listesi
 - Tüm tarih alanlarının yanında 📅 düğmesi var: takvimden gün seçilir, işlem tarihlerinde ardından saat de sorulur (okul harçlığı saati 🕘 ile). Elle yazmak yine serbest.
 - Miktar artık sayı + açılır birim listesi (adet, kg, gr, lt, ml, paket, kutu, şişe, demet, metre, m³, kWh…). Listenin en altındaki “+ Yeni birim…” ile kalıcı birim eklenir (sizin eklediğiniz birimler iki telefonda da görünür; Hatice'nin eklediği kendi telefonunda kalır). Fatura tüketim birimi de aynı listeden seçilir.
+
+## Sürüm 2.15.0 – kaydırma düzeltmesi, en başa/en sona, ek ders tahmini
+- Liste aşağı kaydırılmışken arka plan yenilemesi (20 sn / 2 dk'da bir, ya da eşinizin eklediği kayıt) artık sizi en üste atmıyor: veri değişmediyse ekran hiç yeniden çizilmez; değiştiyse kaldığınız yere geri dönülür. Arama kutusuna yazarken de ekran değişmez.
+- Harcamalar listesinin sağ altında “en başa” ve “en sona” düğmeleri var.
+- Kasa hareketleri (kendi kasanız) ve Planla ekranında **Tahmini ek ders** kartı (yalnızca yönetici görür): ayın pansiyon nöbet sayısını + / − ile girin, o ayın net ek dersi ve gelecek ayın 5–8'inde yatacağı gösterilir. Hesap: (24 − 15) + 2 hazırlık + 2 kulüp + 3 okul nöbeti = haftada 16 saat, okul günlerine göre aya yayılır; ara tatilde günde 3 saat; her pansiyon nöbeti 8 saat. Saat ücreti ozkansoft.com EDUHEP 2026 (Temmuz–Aralık, kadrolu, lisans) ile aynı: brüt 220,57 ₺, %15 gelir vergisi + damga. ⚙ düğmesinden saatler, vergi oranı ve saat ücreti değiştirilebilir. “Yattı – gelir olarak ekle” formu doldurur; bordrodaki net tutarla düzeltip kaydedin. Ayarlar bu telefonda saklanır.

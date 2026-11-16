@@ -1515,3 +1515,73 @@ def tempo_analizi(islemler: list[dict], bas: dt.date, bit: dt.date, bugun: dt.da
         if o_top > 0:
             sonuc["karsilastirma"] = (gunluk_top - o_top) / o_top
     return sonuc
+
+
+# ================================================================== ek ders tahmini (öğretmen)
+# Brüt gündüz ek ders saat ücreti (kadrolu öğretmen, lisans) – ozkansoft.com EDUHEP 2026 ile hesaplandı (16.11.2026).
+# Anahtar: (yıl, 1: Ocak-Haziran / 2: Temmuz-Aralık). Bilinmeyen dönemde en yakın önceki dönem kullanılır.
+EK_DERS_BRUT = {(2026, 2): 220.5717, (2027, 1): round(220.5717 * 1.05, 4)}
+EK_DERS_VARSAYILAN = {"ders": 24, "maas_karsiligi": 15, "hazirlik": 2, "okul_nobeti": 3, "kulup": 2,
+                      "pansiyon_saat": 8, "ara_tatil_gunluk": 3, "gv_orani": 15, "dv_orani": 0.759, "brut": None,
+                      "odeme_bas": 5, "odeme_bit": 8, "nobetler": {}}
+# hb_tatiller okunamazsa (internetsiz) kullanılacak 2026-2027 MEB takvimi
+MEB_TATILLER = [("2026-10-29", "2026-10-29", "Cumhuriyet Bayramı"), ("2026-11-16", "2026-11-20", "1. ara tatil"),
+                ("2027-01-01", "2027-01-01", "Yılbaşı"), ("2027-01-25", "2027-02-05", "Yarıyıl tatili"),
+                ("2027-03-08", "2027-03-12", "2. ara tatil / Ramazan Bayramı"), ("2027-04-23", "2027-04-23", "23 Nisan"),
+                ("2027-05-01", "2027-05-01", "1 Mayıs"), ("2027-05-17", "2027-05-20", "Kurban Bayramı"),
+                ("2027-05-19", "2027-05-19", "19 Mayıs"), ("2027-06-26", "2027-09-12", "Yaz tatili")]
+
+
+def ek_ders_brut(yil: int, ay: int) -> float:
+    anahtar = (yil, 1 if ay <= 6 else 2)
+    onceki = [k for k in EK_DERS_BRUT if k <= anahtar]
+    return EK_DERS_BRUT[max(onceki)] if onceki else EK_DERS_BRUT[min(EK_DERS_BRUT)]
+
+
+def _tatil_turu(gun: dt.date, tatiller) -> str | None:
+    """None: okul günü, 'ara': ara tatil (günlük sabit ek ders ödenir), 'tatil': ödeme yok."""
+    for t in tatiller or MEB_TATILLER:
+        bas, bit, ad = (t.get("bas"), t.get("bit"), t.get("ad")) if isinstance(t, dict) else t
+        try:
+            b, s = dt.date.fromisoformat(str(bas)[:10]), dt.date.fromisoformat(str(bit)[:10])
+        except Exception:
+            continue
+        if b <= gun <= s:
+            return "ara" if "ara tatil" in (ad or "").lower() else "tatil"
+    return None
+
+
+def ek_ders_tahmini(ayar: dict | None, yil: int, ay: int, tatiller=None, pansiyon: int | None = None) -> dict:
+    """Bir ayın tahmini ek ders ücreti. Haftalık ek ders = (derse giriş − maaş karşılığı) + hazırlık + kulüp + okul nöbeti;
+    okul günlerine göre (gün/5) aya yayılır. Ara tatilde günlük sabit saat; pansiyon nöbeti = N × pansiyon_saat.
+    Ücret bir sonraki ayın 5–8'inde ödenir."""
+    a = {**EK_DERS_VARSAYILAN, **(ayar or {})}
+    haftalik = max(float(a["ders"]) - float(a["maas_karsiligi"]), 0) + float(a["hazirlik"]) + float(a["kulup"])
+    nobet_h = float(a["okul_nobeti"])
+    okul = ara = 0
+    for g in range(1, calendar.monthrange(yil, ay)[1] + 1):
+        d = dt.date(yil, ay, g)
+        if d.weekday() >= 5:
+            continue
+        t = _tatil_turu(d, tatiller)
+        if t is None:
+            okul += 1
+        elif t == "ara":
+            ara += 1
+    if pansiyon is None:
+        pansiyon = int((a.get("nobetler") or {}).get(f"{yil}-{ay:02d}", 0) or 0)
+    saat_ders = round((haftalik + nobet_h) * okul / 5, 1)
+    saat_ara = round(float(a["ara_tatil_gunluk"]) * ara, 1)
+    saat_pansiyon = float(pansiyon) * float(a["pansiyon_saat"])
+    saat = round(saat_ders + saat_ara + saat_pansiyon, 1)
+    brut_saat = float(a["brut"] or ek_ders_brut(yil, ay))
+    brut = round(saat * brut_saat, 2)
+    gv = round(brut * float(a["gv_orani"]) / 100, 2)
+    dv = round(brut * float(a["dv_orani"]) / 100, 2)
+    net = round(brut - gv - dv, 2)
+    oy, oa = (yil + 1, 1) if ay == 12 else (yil, ay + 1)
+    return {"yil": yil, "ay": ay, "okul_gunu": okul, "ara_tatil_gunu": ara, "haftalik": haftalik + nobet_h,
+            "saat_ders": saat_ders, "saat_ara": saat_ara, "pansiyon": int(pansiyon), "saat_pansiyon": saat_pansiyon,
+            "saat": saat, "brut_saat": brut_saat, "brut": brut, "gv": gv, "dv": dv, "net": net,
+            "pansiyon_net": round(float(a["pansiyon_saat"]) * brut_saat * (1 - (float(a["gv_orani"]) + float(a["dv_orani"])) / 100), 2),
+            "odeme_bas": dt.date(oy, oa, int(a["odeme_bas"])), "odeme_bit": dt.date(oy, oa, int(a["odeme_bit"]))}

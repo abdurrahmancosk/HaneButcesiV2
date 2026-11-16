@@ -63,7 +63,7 @@ class EkOzellikler:
     # ================================================================== veri
     def ek_varsayilan(self):
         self.ek = {"faturalar": [], "duzenli": [], "butceler": {}, "hedefler": [], "hedef_durum": {}, "alisveris": [],
-                   "borclar": [], "taksitler": [], "abonelikler": []}
+                   "borclar": [], "taksitler": [], "abonelikler": [], "tatiller": []}
         self.ek_hazir = None
         self.alt_sayfa = None
         self.fiyat_verisi = None
@@ -90,6 +90,7 @@ class EkOzellikler:
             "borclar": (s.tablo, "hb_borclar", "select=*&order=kapandi,tarih.desc&limit=200"),
             "taksitler": (s.tablo, "hb_taksitler", "select=*&order=odeme_gunu,id&limit=300"),
             "abonelikler": (s.tablo, "hb_abonelikler", "select=*&order=tur,id"),
+            "tatiller": (s.tablo, "hb_tatiller", "select=*&order=bas"),
         }
         sonuclar = await asyncio.gather(*[self.arka(f, *a) for f, *a in isler.values()], return_exceptions=True)
         hata = 0
