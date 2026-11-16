@@ -4,3 +4,7 @@ build/
 dist/
 *.apk
 *.exe
+imza/
+*.jks
+*.keystore
+*.p12

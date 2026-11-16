@@ -17,6 +17,7 @@ import hb_core as hb
 import hb_ui as ui
 from hb_ui import (ANA, AKTARIM, GELIR, GIDER, acilir, buton, cip, degrade, golge, kart, kat_stil, ORTA, saydam,
                    simge_kutusu, yazi)
+from hb_ek4 import ekstre_tahmini_mi
 
 FATURA_SIMGE = {"Elektrik": ("BOLT", "#f59e0b"), "Su": ("WATER_DROP", "#0ea5e9"), "Doğalgaz": ("LOCAL_FIRE_DEPARTMENT", "#f97316"),
                 "İnternet": ("WIFI", "#6366f1"), "Telefon": ("PHONE_ANDROID", "#14b8a6"), "Aidat": ("APARTMENT", "#8b5cf6"), "Yakıt": ("LOCAL_FIRE_DEPARTMENT", "#ea580c"),
@@ -30,7 +31,7 @@ MENU = [  # anahtar, başlık, açıklama, simge, renk
     ("butceler", "Bütçe limitleri", "Kategori sınırları ve uyarılar", "DONUT_LARGE_ROUNDED", "#e11d48"),
     ("hedefler", "Birikim hedefleri", "Tatil, araba, acil durum…", "SAVINGS_ROUNDED", "#ca8a04"),
     ("borclar", "Borç / alacak", "Kime ne verildi, kimden ne alınacak", "HANDSHAKE_ROUNDED", "#2563eb"),
-    ("taksitler", "Taksitler", "Kredi kartı taksitleri, hatırlatma, ödedim", "CREDIT_CARD_ROUNDED", "#4f46e5"),
+    ("taksitler", "Kredi kartı", "Ekstre, aylık ödeme, gelecek aylar", "CREDIT_CARD_ROUNDED", "#4f46e5"),
     ("abonelikler", "Abonelikler", "Su, doğalgaz, internet… e-postadan otomatik", "MARK_EMAIL_READ_ROUNDED", "#ea4335"),
     ("aliskanlik", "Akıllı bütçe", "Ne sıklıkla ne alıyoruz, gidişat, öneriler", "INSIGHTS_ROUNDED", "#7c3aed"),
     ("sohbet", "Hane sohbeti", "Mesaj, para isteği, kayda yorum", "FORUM_ROUNDED", "#0d9488"),
@@ -126,12 +127,13 @@ class EkOzellikler:
         parcalar = []
         for h in self.hatirlatmalar()[:4]:
             renk = {"gecikti": GIDER, "bugun": GIDER, "yarin": "#d97706"}.get(h["seviye"], AKTARIM)
-            parcalar.append(ft.Container(content=ft.Row([
+            acil = h["seviye"] in ("bugun", "gecikti")
+            parcalar.append(self.yanip_son(ft.Container(content=ft.Row([
                 ft.Icon(ft.Icons.NOTIFICATIONS_ACTIVE_ROUNDED, color=renk, size=20),
                 yazi(h["metin"], 12.5, True, renk=renk, expand=True),
                 ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=renk, size=18)], spacing=8),
-                bgcolor=saydam(renk, "1f"), border_radius=14, padding=12,
-                on_click=lambda e, s=h.get("sayfa", "faturalar"): self.menu_ac(s)))
+                bgcolor=saydam(renk, "33" if acil else "1f"), border=ui.kenar(renk) if acil else None, border_radius=14,
+                padding=12, on_click=lambda e, s=h.get("sayfa", "faturalar"): self.menu_ac(s)), acil))
         asimlar = [b for b in self.butce_durumu() if b[3] >= 0.8][:3]
         for k, h, lim, oran in asimlar:
             renk = GIDER if oran >= 1 else "#d97706"
@@ -454,9 +456,12 @@ class EkOzellikler:
         hat = self.hatirlatmalar()
         for h in hat:
             renk = {"gecikti": GIDER, "bugun": GIDER, "yarin": "#d97706"}.get(h["seviye"], AKTARIM)
-            ogeler.append(ft.Container(content=ft.Row([ft.Icon(ft.Icons.ALARM_ROUNDED, color=renk), yazi(h["metin"], 13, True,
-                                                                                                        renk=renk, expand=True)]),
-                                       bgcolor=saydam(renk, "1f"), border_radius=14, padding=12))
+            acil = h["seviye"] in ("bugun", "gecikti")
+            ogeler.append(self.yanip_son(ft.Container(
+                content=ft.Row([ft.Icon(ft.Icons.ALARM_ROUNDED, color=renk), yazi(h["metin"], 13, True, renk=renk, expand=True)]),
+                bgcolor=saydam(renk, "33" if acil else "1f"), border=ui.kenar(renk) if acil else None, border_radius=14,
+                padding=12, on_click=(lambda e, s=h.get("sayfa"): self.menu_ac(s)) if h.get("sayfa") not in (None, "faturalar")
+                else None), acil))
         yukle = [buton("Fatura yükle", lambda e: self.page.run_task(self.fatura_sec, "resim"), ft.Icons.UPLOAD_FILE_ROUNDED,
                        expand=True),
                  buton("PDF", lambda e: self.page.run_task(self.fatura_sec, "pdf"), ft.Icons.PICTURE_AS_PDF_ROUNDED,
@@ -517,10 +522,21 @@ class EkOzellikler:
                                     "kasadan düşer. Zam gelince tutarı güncelleyebilirsiniz.", 12, renk=ui.SOLUK)))
 
         # Faturalar
-        odenmemis = [f for f in self.ek["faturalar"] if not f.get("odendi")]
+        sinir = (hb.simdi().date() + dt.timedelta(days=35)).isoformat()
+        uzak = [f for f in self.ek["faturalar"] if not f.get("odendi") and ekstre_tahmini_mi(f)
+                and str(f.get("son_odeme") or "9999") > sinir]
+        odenmemis = [f for f in self.ek["faturalar"] if not f.get("odendi") and f not in uzak]
         odenmis = [f for f in self.ek["faturalar"] if f.get("odendi")]
         ogeler.append(yazi(f"Ödenmemiş faturalar ({len(odenmemis)})", 16, True))
         ogeler += [self.fatura_karti(f) for f in sorted(odenmemis, key=lambda f: f.get("son_odeme") or "9999")]
+        if uzak:
+            ogeler.append(ft.Container(content=ft.Row([
+                ft.Icon(ft.Icons.CREDIT_CARD_ROUNDED, color="#4f46e5", size=20),
+                yazi(f"Kredi kartı: sonraki {len(uzak)} ayın tahmini ekstresi ({hb.tl(sum(float(f['tutar']) for f in uzak))})",
+                     12.5, "sb", expand=True),
+                ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=ui.SOLUK)], spacing=10),
+                bgcolor=ui.KART, border_radius=16, padding=12, border=ui.kenar() if ui.KOYU else None,
+                on_click=lambda e: self.menu_ac("taksitler")))
         if not odenmemis:
             ogeler.append(kart(yazi("Ödenmemiş fatura yok 👍", 12.5, renk=ui.SOLUK)))
         if odenmis:
@@ -535,10 +551,25 @@ class EkOzellikler:
 
     def fatura_karti(self, f):
         simge, renk = FATURA_SIMGE.get(f["tur"], FATURA_SIMGE["Diğer"])
+        if ekstre_tahmini_mi(f):
+            renk = "#94a3b8"
         so = f.get("son_odeme")
         so_metin = dt.date.fromisoformat(so).strftime("%d.%m.%Y") if so else "—"
         kalan = (dt.date.fromisoformat(so) - hb.simdi().date()).days if so else None
         durum_renk = GELIR if f.get("odendi") else (GIDER if kalan is not None and kalan <= 1 else "#d97706")
+        acil = not f.get("odendi") and kalan is not None and kalan <= 0
+        if f.get("odendi"):
+            durum_metin = "Ödendi"
+        elif kalan == 0:
+            durum_metin = "Bugün son gün!"
+        elif kalan is not None and kalan < 0:
+            durum_metin = f"{-kalan} gün gecikti"
+        else:
+            durum_metin = f"Son gün {so_metin}"
+        durum = yazi(durum_metin, 11, True, renk=durum_renk)
+        if acil:
+            durum = self.yanip_son(ft.Container(content=durum, bgcolor=saydam(GIDER, "26"), border_radius=8,
+                                                padding=ft.Padding(6, 2, 6, 2)))
         return ft.Container(content=ft.Column([
             ft.Row([simge_kutusu(_ikon(simge), renk, 20, 40),
                     ft.Column([yazi(f"{f['tur']} • {f.get('kurum') or ''}", 14, True, max_lines=1),
@@ -546,8 +577,8 @@ class EkOzellikler:
                                                                            if f.get("tuketim") else None)] if x), 11.5,
                                     renk=ui.SOLUK)], spacing=0, expand=True),
                     ft.Column([yazi(hb.tl(f["tutar"]), 15, True),
-                               yazi("Ödendi" if f.get("odendi") else f"Son gün {so_metin}", 11, True, renk=durum_renk)],
-                              horizontal_alignment=ft.CrossAxisAlignment.END, spacing=0)], spacing=10),
+                               durum],
+                              horizontal_alignment=ft.CrossAxisAlignment.END, spacing=2)], spacing=10),
             *([ft.Container(content=yazi(f["analiz"], 11.5, renk=ui.YAZI), bgcolor=ui.ZEMIN2, border_radius=10, padding=10)]
               if f.get("analiz") else [])], spacing=8),
             bgcolor=ui.KART, border_radius=16, padding=12, shadow=golge(0.4), on_click=lambda e, f=f: self.fatura_detay(f))
@@ -566,7 +597,8 @@ class EkOzellikler:
                                       scroll=ft.ScrollMode.AUTO)], spacing=6), shadow=golge(0.4))
 
     def fatura_detay(self, f):
-        d = ft.AlertDialog(title=yazi(f"{f['tur']} faturası", 17, True))
+        d = ft.AlertDialog(title=yazi(("Kart ekstresi" + (" (tahmini)" if ekstre_tahmini_mi(f) else ""))
+                                      if f.get("tur") == "Kredi kartı" else f"{f['tur']} faturası", 17, True))
         satir = lambda k, v: ft.Row([yazi(k, 12, renk=ui.SOLUK, width=110), yazi(str(v), 13, expand=True)])
         icerik = [satir(k, v) for k, v in [("Kurum", f.get("kurum")), ("Abone no", f.get("abone_no")), ("Dönem", f.get("donem")),
                                            ("Tüketim", f"{float(f['tuketim']):g} {f.get('birim') or ''}" if f.get("tuketim") else None),
@@ -610,22 +642,48 @@ class EkOzellikler:
 
     def fatura_ode(self, f):
         kasa = self._kasa_secici(f.get("kasa_sahibi"))
+        kart_mi = f.get("tur") == "Kredi kartı"
+        tutar_tf = ft.TextField(label="Ödenen tutar (₺)", value=f"{float(f['tutar']):.2f}".replace(".", ","), dense=True,
+                                keyboard_type=ft.KeyboardType.NUMBER) if kart_mi else None
 
         async def kaydet():
             sahip = kasa.value if self.yonetici else self.ben["id"]
-            kayit = {"tur": "Gider", "tutar": float(f["tutar"]), "tarih": hb.iso_tarih(hb.simdi()),
-                     "firma": f.get("kurum"), "urun": f"{f['tur']} Faturası" + (f" ({f['donem']})" if f.get("donem") else ""),
-                     "kategori": f.get("kategori") or "Kira & Aidat & Faturalar", "kasa_sahibi": sahip, "hedef_kasa": None,
+            tutar = hb.tutar_coz(tutar_tf.value) if tutar_tf else float(f["tutar"])
+            if tutar is None or tutar < 0:
+                self.bildir("Ödenen tutarı girin.", GIDER)
+                return False
+            if tutar == 0:  # ödenecek bir şey yok (örn. alacaklı ekstre): yalnızca kapat
+                await self._islem(self.supa.tablo_guncelle, "hb_faturalar", f["id"], {"odendi": True}, basari="Kapatıldı ✓")
+                return
+            ad = "Kredi kartı ekstresi" if kart_mi else f"{f['tur']} Faturası"
+            kayit = {"tur": "Gider", "tutar": float(tutar), "tarih": hb.iso_tarih(hb.simdi()),
+                     "firma": f.get("kurum"), "urun": ad + (f" ({f['donem']})" if f.get("donem") else ""),
+                     "kategori": f.get("kategori") or ("Kredi Kartı, Kredi Ödemesi & Borç" if kart_mi else
+                                                       "Kira & Aidat & Faturalar"),
+                     "kasa_sahibi": sahip, "hedef_kasa": None,
                      "fis_gorsel": f.get("gorsel"), "aciklama": "Fatura ödemesi"}
             try:
                 eklenen = await self.arka(self.supa.islem_ekle, [kayit])
+                devir = ""
+                if kart_mi and tutar < float(f["tutar"]) - 0.5:  # kısmi ödeme: kalan, gelecek ayın tahminine eklenir
+                    sonraki = self._sonraki_kart_tahmini(f)
+                    if sonraki:
+                        kalan = round(float(f["tutar"]) - tutar, 2)
+                        await self.arka(self.supa.tablo_guncelle, "hb_faturalar", sonraki["id"],
+                                        {"tutar": round(float(sonraki["tutar"]) + kalan, 2),
+                                         "analiz": f"Önceki ekstreden devreden {hb.tl(kalan)} eklendi (faiz hariç). "
+                                                   + (sonraki.get("analiz") or "")})
+                        devir = f" • kalan {hb.tl(kalan)} gelecek ayın ekstresine eklendi"
                 await self._islem(self.supa.tablo_guncelle, "hb_faturalar", f["id"],
-                                  {"odendi": True, "odeme_islem_id": (eklenen[0]["id"] if eklenen else None)},
-                                  basari="Ödendi ✓ Kasadan düşüldü")
+                                  {"odendi": True, "odeme_islem_id": ((eklenen[0] or {}).get("id") if eklenen else None)},
+                                  basari="Ödendi ✓ Kasadan düşüldü" + devir)
             except Exception as ex:
                 self.bildir(f"Kaydedilemedi: {ex}", GIDER)
 
-        self._girdi_dialog("Fatura ödendi", [yazi(f"{hb.tl(f['tutar'])} gider olarak kaydedilecek.", 13)] +
+        govde = ([yazi("Ekstrenin tamamını ödemediyseniz ödediğiniz tutarı yazın; kalan borç bir sonraki ekstreye "
+                       "devreder.", 11.5, renk=ui.SOLUK), tutar_tf] if kart_mi else
+                 [yazi(f"{hb.tl(f['tutar'])} gider olarak kaydedilecek.", 13)])
+        self._girdi_dialog("Kart ödemesi" if kart_mi else "Fatura ödendi", govde +
                            ([yazi("Hangi kasadan ödendi?", 12, renk=ui.SOLUK), kasa] if self.yonetici else []), kaydet, "Kaydet")
 
     async def fatura_sec(self, tip):
@@ -641,7 +699,7 @@ class EkOzellikler:
         if tip == "pdf":
             sifreli = await self.arka(ak.pdf_sifreli_mi, veri)
             if sifreli or ak.ekstre_mi(await self.arka(ak.pdf_metni, veri)):
-                self.bildir("💳 Bu bir kredi kartı ekstresi: taksitler Taksitler bölümüne eklenecek")
+                self.bildir("💳 Bu bir kredi kartı ekstresi: aylık ödeme tutarı çıkarılacak")
                 self.planla_ac("taksitler")
                 await self.ekstre_isle(veri, "pdf")
                 return
@@ -674,14 +732,14 @@ class EkOzellikler:
                           if (f.get("kategori") or varsayilan_kat.get(f.get("tur"), "Kira & Aidat & Faturalar")) in self.kategoriler
                           else "Diğer")
         kart_uyari = kart(ft.Column([
-            yazi("Kredi kartı ekstresinde taksitler varsa onları Taksitler bölümünde takip edin; ekstreyi ayrıca fatura olarak "
-                 "öderseniz harcama iki kez sayılır.", 11.5, renk="#b45309"),
-            buton("Taksitleri ekstreden çıkar", lambda e: (self.dialog_kapat(), self.planla_ac("taksitler"),
-                                                             self.ekstre_yukle()), ft.Icons.CREDIT_CARD_ROUNDED, tip="text")],
-            spacing=4), renk=ui.UYARI_ZEMIN, dolgu=10, visible=f.get("tur") == "Kredi kartı")
+            yazi("İpucu: Kart ekstresini PDF ya da ekran görüntüsüyle yüklerseniz bu ayın toplamı son ödeme gününe, kalan "
+                 "taksitler gelecek aylara kendiliğinden yazılır; iadeler harcama sayılmaz.", 11.5, renk="#b45309"),
+            buton("Ekstre yükle", lambda e: (self.dialog_kapat(), self.planla_ac("taksitler"),
+                                             self.ekstre_yukle()), ft.Icons.CREDIT_CARD_ROUNDED, tip="text")],
+            spacing=4), renk=ui.UYARI_ZEMIN, dolgu=10, visible=f.get("tur") == "Kredi kartı" and not mevcut)
 
         def tur_degisti(e):
-            kart_uyari.visible = tur.value == "Kredi kartı"
+            kart_uyari.visible = tur.value == "Kredi kartı" and not mevcut
             if tur.value in varsayilan_kat and varsayilan_kat[tur.value] in self.kategoriler:
                 kategori.value = varsayilan_kat[tur.value]
             self.guncelle()

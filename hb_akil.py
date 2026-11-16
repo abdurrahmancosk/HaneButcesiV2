@@ -8,6 +8,7 @@ Hane Bütçesi v2 – akıllı özellikler (arayüzden bağımsız)
 from __future__ import annotations
 
 import base64
+import calendar
 import datetime as dt
 import difflib
 import io
@@ -165,14 +166,22 @@ def fatura_hatirlatmalari(faturalar: list[dict], bugun: dt.date | None = None) -
         except Exception:
             continue
         kalan = (so - bugun).days
+        kart = f.get("tur") == "Kredi kartı"
+        if kart:
+            tahmini = str(f.get("mail_id") or "").endswith(":tahmin")
+            ad = f"💳 Kart ekstresi{' (tahmini)' if tahmini else ''}{' • ' + f['kurum'] if f.get('kurum') else ''}"
+            ek = {"sayfa": "taksitler"}
+        else:
+            ad, ek = f"{f.get('tur')} faturası", {}
+        tl = f" ({hb.tl(f.get('tutar'))})" if f.get("tutar") is not None else ""
         if kalan < 0:
-            sonuc.append({"fatura": f, "seviye": "gecikti", "metin": f"{f.get('tur')} faturasının son ödeme tarihi {-kalan} gün geçti!"})
+            sonuc.append({"fatura": f, "seviye": "gecikti", "metin": f"{ad}: son ödeme {-kalan} gün geçti!{tl}", **ek})
         elif kalan == 0:
-            sonuc.append({"fatura": f, "seviye": "bugun", "metin": f"{f.get('tur')} faturasının SON ÖDEME GÜNÜ BUGÜN"})
+            sonuc.append({"fatura": f, "seviye": "bugun", "metin": f"{ad}: SON ÖDEME GÜNÜ BUGÜN{tl}", **ek})
         elif kalan == 1:
-            sonuc.append({"fatura": f, "seviye": "yarin", "metin": f"{f.get('tur')} faturasının son ödeme günü YARIN"})
+            sonuc.append({"fatura": f, "seviye": "yarin", "metin": f"{ad}: son ödeme günü YARIN{tl}", **ek})
         elif kalan <= 3:
-            sonuc.append({"fatura": f, "seviye": "yakin", "metin": f"{f.get('tur')} faturasına {kalan} gün kaldı"})
+            sonuc.append({"fatura": f, "seviye": "yakin", "metin": f"{ad}: son ödemeye {kalan} gün kaldı{tl}", **ek})
     sira = {"gecikti": 0, "bugun": 1, "yarin": 2, "yakin": 3}
     return sorted(sonuc, key=lambda x: sira[x["seviye"]])
 
@@ -963,53 +972,191 @@ def ekstre_mi(metin: str) -> bool:
     return sum(1 for iz in _EKSTRE_IZLERI if iz in m) >= 2
 
 
-def ekstre_analiz_et(veri: bytes, mime: str, api_anahtari: str, kategoriler: list[str]) -> dict:
-    istem = f"""Bu bir Türk bankasının kredi kartı hesap özeti (ekstre). Yalnızca şu JSON'u döndür:
-{{"banka": "banka adı", "kart": "kart adı (örn. Bonus, World, Axess, Maximum, CardFinans)",
-"hesap_kesim": "YYYY-MM-DD", "son_odeme": "YYYY-MM-DD", "donem_borcu": 0.0, "asgari": 0.0,
-"taksitler": [{{"ad": "işyeri / ürün adı, sade ve okunur", "aylik_tutar": 0.0, "taksit_no": 3, "toplam_taksit": 6,
-  "islem_tarihi": "YYYY-MM-DD", "kategori": "listeden biri"}}],
-"diger_harcamalar": [{{"ad": "işyeri", "tutar": 0.0, "tarih": "YYYY-MM-DD"}}]}}
+# Eşleştirme hb.urun_anahtari ile küçültülmüş metinde yapılır (İ/I/ı → i)
+_IADE_IZI = re.compile(r"\b(iade\w*|iptal\w*|ters\s*kayit\w*|geri\s*[öo]deme\w*|refund\w*|chargeback|cash\s*back|"
+                       r"itiraz\w*|alacak\s*kayd\w*)")
+_ODEME_IZI = re.compile(r"(te[şs]ekk[üu]r|otomatik\s*[öo]deme|hesaptan\s*[öo]deme|kart\s*[öo]demesi|bor[çc]\s*[öo]deme|"
+                        r"^[öo]deme\b|\b[öo]demeniz\b|havale\s*ile|eft\s*ile|virman)")
+_ODEME_KESIN = re.compile(r"(te[şs]ekk[üu]r|otomatik\s*[öo]deme|hesaptan\s*[öo]deme|[öo]demeniz\s*i[çc]in)")
+
+
+def _iade_mi(ad: str) -> bool:
+    return bool(_IADE_IZI.search(hb.urun_anahtari(ad)))
+
+
+def _odeme_mi(ad: str, kesin: bool = False) -> bool:
+    return bool((_ODEME_KESIN if kesin else _ODEME_IZI).search(hb.urun_anahtari(ad)))
+
+
+def _isaretli_tutar(x) -> float | None:
+    """'450,00-', '-450,00', '(450,00)', '450,00 A' gibi alacak yazımlarını eksi sayar."""
+    if x is None:
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    m = str(x).strip()
+    eksi = m.startswith("-") or m.endswith("-") or (m.startswith("(") and m.endswith(")")) or \
+        bool(re.search(r"\s(A|ALACAK|CR)$", m, re.I))
+    t = hb.tutar_coz(m.strip("()-+ ").rstrip("AaBb ").strip())
+    if t is None:
+        return None
+    return -abs(t) if eksi else t
+
+
+def ekstre_analiz_et(veri: bytes, mime: str, api_anahtari: str, kategoriler: list[str] | None = None) -> dict:
+    """Kart ekstresinden yalnızca gerekenleri çıkarır: bu ayın ödenecek tutarı + son ödeme tarihi, kalan taksitler
+    (gelecek ayların tutarı için) ve iadeler (harcama sayılmasın diye). Ayrıntılı harcama listesi kullanıcıya gösterilmez."""
+    istem = """Bu bir Türk bankasının kredi kartı hesap özeti (ekstre). Yalnızca şu JSON'u döndür:
+{"banka": "banka adı", "kart": "kart adı (örn. Bonus, World, Axess, Maximum, CardFinans, Paraf)",
+"kart_son4": "kart numarasının son 4 hanesi ya da null",
+"hesap_kesim": "YYYY-MM-DD", "son_odeme": "YYYY-MM-DD",
+"donem_borcu": 0.0, "asgari": 0.0, "odemeler": 0.0, "ucretler": 0.0,
+"taksitler": [{"ad": "işyeri / ürün", "aylik_tutar": 0.0, "taksit_no": 3, "toplam_taksit": 6}],
+"harcamalar": [{"ad": "işyeri", "tutar": 0.0}],
+"iadeler": [{"ad": "işyeri / açıklama", "tutar": 0.0, "taksitli": false}],
+"gelecek_donemler": [{"ay": "YYYY-MM", "tutar": 0.0}]}
 Kurallar:
-- "taksitler": bu ekstrede yer alan TAKSİTLİ işlemler. "3/6", "3. taksit / 6", "Taksit 3/6" gibi ifadelerden taksit_no ve
-  toplam_taksit çıkar; aylik_tutar bu ekstreye düşen taksit tutarıdır (toplam işlem tutarı DEĞİL).
-- Taksitsiz alışverişler "diger_harcamalar"a; ödemeler, faiz, BSMV, ücretler, iadeler hiçbir listeye girmez.
-- Tutarlar sayı olsun (1.234,56 → 1234.56). Bulamadığın alanı null yap, uydurma.
-- Kategori şu listeden biri olsun: {json.dumps(kategoriler, ensure_ascii=False)}"""
+- "donem_borcu": bu ekstrenin son ödeme tarihine kadar ödenmesi gereken TOPLAM tutar ("Dönem borcu", "Hesap özeti borcu",
+  "Ödenmesi gereken tutar", "Toplam borcunuz (bu dönem)"). İadeler ve yapılan ödemeler bu tutardan zaten düşülmüştür.
+  Asgari ödeme tutarı DEĞİL; gelecek dönem taksitlerini de içeren "kalan toplam borç" DEĞİL. Kart alacaklıysa eksi yaz.
+- "taksitler": bu ekstreye düşen TAKSİTLİ işlemler. "3/6", "3. taksit / 6", "Taksit 3/6" ifadelerinden taksit_no ve
+  toplam_taksit çıkar. aylik_tutar bu ekstreye düşen taksit tutarıdır (işlemin toplamı değil), artı sayı.
+  İade edilmiş / iptal edilmiş bir taksitli alışverişi buraya KOYMA (kalan taksitleri ödenmeyecek).
+- "harcamalar": taksitsiz alışverişler, artı sayı.
+- "iadeler": eksi (-) işaretli ya da "İADE", "İptal", "Ters kayıt", "Geri ödeme", "ParaPuan/Bonus iadesi" gibi kartınıza
+  ALACAK yazılan kayıtlar. Tutarı artı sayı olarak yaz. Taksitli bir alışverişin iadesiyse "taksitli": true.
+  İadeler ASLA "harcamalar" ya da "taksitler"e girmez.
+- Kart borcu ödemeleri ("Ödeme - Teşekkür ederiz", "Otomatik ödeme", "Hesaptan ödeme") hiçbir listeye girmez;
+  toplamlarını "odemeler"e yaz. Faiz, BSMV, KKDF, kart aidatı, gecikme ücreti toplamını "ucretler"e yaz.
+- "gelecek_donemler": ekstrede "Gelecek dönem taksitleri", "Sonraki dönemlere ait taksit tutarları" gibi bir tablo varsa
+  BU EKSTREDEN SONRAKİ dönemlerin ay ay toplamları (bu dönemi yazma); yoksa boş liste.
+- Tutarlar sayı olsun (1.234,56 → 1234.56). Bulamadığın alanı null yap, uydurma."""
     sonuc = gemini(istem, api_anahtari, gorsel=veri, mime=mime, sicaklik=0.1)
     if not isinstance(sonuc, dict):
         raise hb.ApiHatasi(500, "Ekstre okunamadı")
+    return ekstre_coz(sonuc)
 
+
+def _iade_taksite_ait(iade: dict, t: dict) -> bool:
+    """Taksitli iade bu taksitli alışverişe mi ait? (ad benzerliği + tutar uyumu)"""
+    a = re.sub(r"[^a-zçğöşü0-9 ]", " ", _IADE_IZI.sub(" ", hb.urun_anahtari(iade["ad"]))).split()
+    b = re.sub(r"[^a-zçğöşü0-9 ]", " ", hb.urun_anahtari(t["ad"])).split()
+    if not a or not b:
+        return False
+    ia, ib = " ".join(a), " ".join(b)
+    benzer = _benzerlik(ia, ib)
+    if ia in ib or ib in ia:
+        benzer = max(benzer, 0.8)
+    ay, n, no = float(t["aylik_tutar"]), int(t["toplam_taksit"]), int(t["taksit_no"])
+    tutar_uyar = any(abs(iade["tutar"] - x) <= 1.0 for x in (ay, ay * n, ay * (n - no + 1), ay * (n - no)) if x > 0)
+    return benzer >= 0.85 or (benzer >= 0.5 and tutar_uyar)
+
+
+def ekstre_coz(sonuc: dict) -> dict:
+    """Gemini yanıtını temizler; iadeleri harcamalardan ayırır, bu ayın tutarını belirler."""
     def _t(x):
         try:
             return dt.date.fromisoformat(str(x)[:10])
         except Exception:
             return hb.tarih_kesin(x)
 
-    taksitler = []
-    for t in sonuc.get("taksitler") or []:
-        if not isinstance(t, dict):
+    taksitler, harcamalar, iadeler = [], [], []
+    for x in sonuc.get("iadeler") or []:
+        if isinstance(x, dict):
+            t = _isaretli_tutar(x.get("tutar"))
+            if t:
+                iadeler.append({"ad": str(x.get("ad") or "İade").strip()[:60], "tutar": round(abs(t), 2),
+                                "taksitli": bool(x.get("taksitli"))})
+    for x in sonuc.get("taksitler") or []:
+        if not isinstance(x, dict):
             continue
-        tutar = hb.tutar_coz(t.get("aylik_tutar"))
+        ad = str(x.get("ad") or "Taksitli alışveriş").strip()[:60]
+        t = _isaretli_tutar(x.get("aylik_tutar"))
         try:
-            no, toplam = int(t.get("taksit_no") or 0), int(t.get("toplam_taksit") or 0)
+            no, toplam = int(x.get("taksit_no") or 0), int(x.get("toplam_taksit") or 0)
         except Exception:
             no, toplam = 0, 0
-        if not tutar or tutar <= 0 or toplam < 1 or not 1 <= no <= toplam:
+        if not t:
             continue
-        kat = t.get("kategori") if t.get("kategori") in kategoriler else "Diğer"
-        taksitler.append({"ad": str(t.get("ad") or "Taksitli alışveriş").strip()[:60], "aylik_tutar": round(abs(tutar), 2),
-                          "taksit_no": no, "toplam_taksit": toplam, "islem_tarihi": _t(t.get("islem_tarihi")),
-                          "kategori": kat})
-    diger = []
-    for h in sonuc.get("diger_harcamalar") or []:
-        if isinstance(h, dict) and hb.tutar_coz(h.get("tutar")):
-            diger.append({"ad": str(h.get("ad") or "").strip()[:60], "tutar": abs(hb.tutar_coz(h.get("tutar"))),
-                          "tarih": _t(h.get("tarih"))})
+        if t < 0 or _iade_mi(ad):  # yanlışlıkla taksit sanılan iade
+            iadeler.append({"ad": ad, "tutar": round(abs(t), 2), "taksitli": True})
+            continue
+        if toplam < 1 or not 1 <= no <= toplam:
+            harcamalar.append({"ad": ad, "tutar": round(t, 2)})
+            continue
+        taksitler.append({"ad": ad, "aylik_tutar": round(t, 2), "taksit_no": no, "toplam_taksit": toplam})
+    odeme_ek = 0.0
+    for x in sonuc.get("harcamalar") or sonuc.get("diger_harcamalar") or []:
+        if not isinstance(x, dict):
+            continue
+        ad = str(x.get("ad") or "").strip()[:60]
+        t = _isaretli_tutar(x.get("tutar"))
+        if not t:
+            continue
+        if (t < 0 and _odeme_mi(ad)) or _odeme_mi(ad, kesin=True):
+            odeme_ek += abs(t)  # kart borcu ödemesi: harcama da iade de değil
+        elif t < 0 or _iade_mi(ad):
+            iadeler.append({"ad": ad or "İade", "tutar": round(abs(t), 2), "taksitli": False})
+        else:
+            harcamalar.append({"ad": ad, "tutar": round(t, 2)})
+    iade_toplami = round(sum(i["tutar"] for i in iadeler), 2)
+    ucretler = abs(_isaretli_tutar(sonuc.get("ucretler")) or 0.0)
+    hesap = round(sum(t["aylik_tutar"] for t in taksitler) + sum(h["tutar"] for h in harcamalar) + ucretler - iade_toplami, 2)
+    # iade edilen taksitli alışverişin kalan taksitleri gelecek aylara yazılmasın
+    for i in iadeler:
+        if i["taksitli"]:
+            taksitler = [t for t in taksitler if not _iade_taksite_ait(i, t)]
+    borc = _isaretli_tutar(sonuc.get("donem_borcu"))
+    if borc is not None and (borc != 0 or hesap <= 0):
+        bu_ay, kaynak = borc, "banka"
+    else:
+        bu_ay, kaynak = hesap, "hesap"
+    gelecek = []
+    for g in sonuc.get("gelecek_donemler") or []:
+        if isinstance(g, dict):
+            t = _isaretli_tutar(g.get("tutar"))
+            if t and t > 0:
+                gelecek.append((str(g.get("ay") or "")[:7], round(t, 2)))
+    son4 = re.sub(r"\D", "", str(sonuc.get("kart_son4") or ""))[-4:]
     return {"banka": (sonuc.get("banka") or "").strip(), "kart": (sonuc.get("kart") or "").strip(),
+            "son4": son4 if len(son4) == 4 else "",
             "hesap_kesim": _t(sonuc.get("hesap_kesim")), "son_odeme": _t(sonuc.get("son_odeme")),
-            "donem_borcu": hb.tutar_coz(sonuc.get("donem_borcu")), "asgari": hb.tutar_coz(sonuc.get("asgari")),
-            "taksitler": taksitler, "diger": diger}
+            "donem_borcu": borc, "asgari": abs(_isaretli_tutar(sonuc.get("asgari")) or 0.0) or None,
+            "bu_ay": round(max(0.0, bu_ay), 2), "bu_ay_kaynak": kaynak, "alacakli": bu_ay < 0,
+            "taksitler": taksitler, "harcama_toplami": round(sum(h["tutar"] for h in harcamalar), 2),
+            "harcama_adedi": len(harcamalar), "iadeler": iadeler, "iade_toplami": iade_toplami,
+            "ucretler": round(ucretler, 2),
+            "odemeler": round(max(abs(_isaretli_tutar(sonuc.get("odemeler")) or 0.0), odeme_ek), 2),
+            "gelecek_tablo": sorted(gelecek)}
+
+
+def _is_gunu(d: dt.date) -> dt.date:
+    """Hafta sonuna denk gelen son ödeme tarihini pazartesiye kaydırır (bankalar böyle yapar)."""
+    return d + dt.timedelta(days=(7 - d.weekday()) % 7) if d.weekday() >= 5 else d
+
+
+def ay_ekle(d: dt.date, n: int, gun: int | None = None) -> dt.date:
+    ay = d.month - 1 + n
+    y, m = d.year + ay // 12, ay % 12 + 1
+    return dt.date(y, m, min(gun or d.day, calendar.monthrange(y, m)[1]))
+
+
+def ekstre_plani(s: dict, son_odeme: dt.date, bu_ay: float, ay_siniri: int = 24) -> list[dict]:
+    """[{sira, son_odeme, tutar, tahmini}] – sira 0: bu ekstre; 1..: kalan taksitlerden gelecek ay tahminleri
+    (kartla yeni harcama yapılmayacağı varsayımıyla)."""
+    plan = [{"sira": 0, "son_odeme": son_odeme, "tutar": round(max(0.0, bu_ay), 2), "tahmini": False}]
+    yuk: dict[int, float] = {}
+    for t in s.get("taksitler") or []:
+        for j in range(1, min(int(t["toplam_taksit"]) - int(t["taksit_no"]), ay_siniri) + 1):
+            yuk[j] = yuk.get(j, 0.0) + float(t["aylik_tutar"])
+    if not yuk and s.get("gelecek_tablo"):  # kalemler yoksa bankanın "gelecek dönem taksitleri" tablosu
+        for j, (_, tutar) in enumerate(s["gelecek_tablo"][:ay_siniri], start=1):
+            yuk[j] = tutar
+    for j in sorted(yuk):
+        if yuk[j] > 0:
+            plan.append({"sira": j, "son_odeme": _is_gunu(ay_ekle(son_odeme, j)), "tutar": round(yuk[j], 2),
+                         "tahmini": True})
+    return plan
 
 
 # ----------------------------------------------------------------------------

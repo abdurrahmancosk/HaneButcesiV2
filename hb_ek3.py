@@ -1195,7 +1195,7 @@ class EkOzellikler3:
                         lambda: self.menu_ac("faturalar")))
         sec.append(kutu(ft.Icons.APARTMENT_ROUNDED, "Aidat & yakıt (PBY)", "Bina yönetimi ekran görüntüsünden", "#8b5cf6",
                         self.pby_yukle))
-        sec.append(kutu(ft.Icons.CREDIT_CARD_ROUNDED, "Kart ekstresi", "PDF hesap özetinden taksitler", "#4f46e5",
+        sec.append(kutu(ft.Icons.CREDIT_CARD_ROUNDED, "Kart ekstresi", "Aylık ödeme ve gelecek aylar", "#4f46e5",
                         lambda: (self.planla_ac("taksitler"), self.ekstre_yukle())))
         izgara = ft.ResponsiveRow(sec, spacing=10, run_spacing=10) if hasattr(ft, "ResponsiveRow") else ft.Row(sec, wrap=True)
         icerik = ft.Container(content=ft.Column([
@@ -1240,8 +1240,12 @@ class EkOzellikler3:
         satir = []
         for h in hat[:5]:
             renk = {"gecikti": GIDER, "bugun": GIDER, "yarin": "#d97706"}.get(h["seviye"], ui.SOLUK)
-            satir.append(ft.Row([ft.Container(width=8, height=8, border_radius=4, bgcolor=renk),
-                                 yazi(h["metin"], 12.5, expand=True)], spacing=10))
+            acil = h["seviye"] in ("bugun", "gecikti")
+            satir.append(self.yanip_son(ft.Container(content=ft.Row([
+                ft.Container(width=8, height=8, border_radius=4, bgcolor=renk),
+                yazi(h["metin"], 12.5, True if acil else False, renk=GIDER if acil else None, expand=True)], spacing=10),
+                bgcolor=saydam(GIDER, "1f") if acil else None, border_radius=10,
+                padding=ft.Padding(8, 6, 8, 6) if acil else None), acil))
         if not satir:
             satir = [yazi("Yaklaşan ödeme yok. Fatura yüklediğinizde son ödeme gününden önce hatırlatılır.", 12, renk=ui.SOLUK)]
         k.append(bolum(ft.Icons.EVENT_ROUNDED, "#d97706", "Yaklaşan ödemeler", "Faturalar", "faturalar", satir))
@@ -1263,18 +1267,34 @@ class EkOzellikler3:
             bsatir = [yazi("Henüz bütçe limiti yok. Market, dışarıda yemek gibi kategorilere dönem limiti koyabilirsiniz.", 12,
                            renk=ui.SOLUK)]
         k.append(bolum(ft.Icons.DONUT_LARGE_ROUNDED, "#e11d48", "Bütçe", "Limitler", "butceler", bsatir))
-        # taksitler
+        # kredi kartı: ödenecek ekstreler (gerçek + tahmini) ve elle eklenen taksitler
+        from hb_ek4 import ekstre_tahmini_mi
+        bugun = hb.simdi().date()
         tsatir = []
+        for f in self.kart_ekstreleri()[:4]:
+            try:
+                so = dt.date.fromisoformat(str(f.get("son_odeme"))[:10])
+            except Exception:
+                so = None
+            acil = so is not None and so <= bugun
+            satir = ft.Row([yazi(f"{ui.AYLAR_UZUN[so.month - 1]} {so.year}" if so else (f.get("donem") or "Ekstre"), 12.5, "sb",
+                                 renk=GIDER if acil else None, expand=True),
+                            yazi(("tahmini • " if ekstre_tahmini_mi(f) else "") +
+                                 (f"son gün {so.day:02d}.{so.month:02d}" if so else ""), 11.5,
+                                 renk=GIDER if acil else ui.SOLUK),
+                            yazi(hb.tl(f.get("tutar") or 0), 12.5, "xb", renk=GIDER if acil else None)], spacing=8)
+            tsatir.append(self.yanip_son(ft.Container(content=satir), acil) if acil else satir)
         for (kartadi, sahip, vade), ts in self.taksit_gruplari()[:3]:
             if not self.yonetici and sahip != self.ben["id"]:
                 continue
-            tsatir.append(ft.Row([yazi(f"{kartadi} • {vade.day} {ui.AYLAR_UZUN[vade.month - 1]}", 12.5, "sb", expand=True),
+            tsatir.append(ft.Row([yazi(f"{kartadi} taksit • {vade.day} {ui.AYLAR_UZUN[vade.month - 1]}", 12.5, "sb",
+                                       expand=True),
                                   yazi(", ".join(t["ad"] for t in ts)[:28], 11.5, renk=ui.SOLUK),
                                   yazi(hb.tl(sum(float(t["aylik_tutar"]) for t in ts)), 12.5, "xb")], spacing=8))
         if not tsatir:
-            tsatir = [yazi("Kredi kartı taksitlerinizi ekleyin; günü gelince hatırlatılır, “Ödedim” ile kasadan düşer.", 12,
-                           renk=ui.SOLUK)]
-        k.append(bolum(ft.Icons.CREDIT_CARD_ROUNDED, "#4f46e5", "Taksitler", "Tümü", "taksitler", tsatir))
+            tsatir = [yazi("Kart ekstrenizi yükleyin: bu ayın toplamı son ödeme gününe, kalan taksitler gelecek aylara "
+                           "yazılır; günü gelince hatırlatılır.", 12, renk=ui.SOLUK)]
+        k.append(bolum(ft.Icons.CREDIT_CARD_ROUNDED, "#4f46e5", "Kredi kartı", "Tümü", "taksitler", tsatir))
         # alışveriş
         bekleyen = [a for a in self.ek["alisveris"] if not a.get("alindi")]
         asatir = [ft.Column([ft.Row([ft.Icon(ft.Icons.RADIO_BUTTON_UNCHECKED_ROUNDED, size=16, color=ui.SOLUK),

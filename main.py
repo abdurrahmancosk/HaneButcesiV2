@@ -12,7 +12,7 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.10.0"
+SURUM = "2.11.0"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler
@@ -461,8 +461,10 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         ciziciler = [self.ozet_ekrani, self.islemler_ekrani, self.ekle_ekrani, self.fis_ekrani, self.menu_ekrani,
                      self.planla_ekrani]
         self.page.bgcolor = ui.ARKA
+        self._yanipsonen = []  # yanıp sönen uyarılar her çizimde yeniden toplanır
         try:
             self.govde.content = ciziciler[self.sekme](**kw)
+            self._yanip_kok = self.govde.content
             if self.sekme in (0, 1, 4, 5):
                 self.yenileme_bagla(self.govde.content)
         except Exception as e:
@@ -1422,7 +1424,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             if sifreli or ak.ekstre_mi(metin):
                 # banka hesap özetleri genelde şifreli PDF'tir: fiş yerine ekstre olarak işle
                 self.fis = None
-                self.bildir("💳 Bu bir kart ekstresi; taksitler aranacak" if not sifreli else
+                self.bildir("💳 Bu bir kart ekstresi; aylık ödeme tutarı çıkarılacak" if not sifreli else
                             "🔒 Şifreli PDF: kart ekstresi olarak açılıyor")
                 self.alt_sayfa = "taksitler"
                 self.sekmeye_git(4)

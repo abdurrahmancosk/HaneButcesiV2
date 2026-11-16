@@ -131,3 +131,18 @@ Menü > Abonelikler > (Su aboneliğine dokunun ya da “Abonelik ekle”) → Ku
 - **Günlük harcama sınırı:** Özet'te “Bugün harcayabileceğin”: kasadan bu dönemin ödenmemiş faturaları, taksitleri ve düzenli ödemeleri düşülür, kalan gün sayısına bölünür. %90'da ve aşılınca uyarır.
 - **Akıllı bütçe (Menü):** son 6 ayın fişlerinden hangi ürünü ne sıklıkla/ne kadara aldığınız, yakında bitecekler (tek dokunuşla listeye), bu dönemin gidişatı ve ortalamalar, ortalamaları bütçe limiti yapma, yapay zeka önerileri.
 - Düzeltmeler: elle eklemede `suffix_text` hatası; Flet 1.x'te değişen parametreler için genel uyumluluk katmanı; açılır listelerde seçim olayının çalışmaması (ESKİ aboneliğinin kaydedilememesi); pencere kapatılırken üstteki bildirimin pencere yerine kapanması; fiş detayında “Yorum yaz” hatası.
+
+## Sürüm 2.11 – kalıcı APK imzası, yeni kredi kartı ekstresi, yanıp sönen uyarılar
+**Bir kez – APK güncelleme sorunu (önemli):**
+1. Klasördeki **Imza_Kur.bat** dosyasını çalıştırın. Tarayıcıda GitHub'ın “New repository secret” sayfası açılır; her adımda gereken metin panoya kopyalanır, siz Ctrl+V yapıp “Add secret”e basarsınız. İki secret eklenir: `ANDROID_KEYSTORE_BASE64` ve `ANDROID_KEYSTORE_PASSWORD`. (Bilgisayarda GitHub CLI `gh` giriş yapılmışsa bunu kendisi yapar.)
+2. Sonra **GitHub_Yukle.bat** ile derletin. GitHub > Releases'te “Kalici imza” yazıyorsa tamam.
+3. Telefonlarda bekleyen çevrimdışı kayıt olmadığından emin olun, eski uygulamayı **son bir kez** silin, yeni APK'yi kurun. Kayıtlarınız bulutta olduğu için kaybolmaz; yalnızca telefonda tutulanlar yeniden yapılır: giriş, PIN/parmak izi, tema, Gmail uygulama şifresi ve (yaptıysanız) Erzurum altın fiyatı eşitlemesi.
+4. Bundan sonraki her sürüm silmeden “Güncelle” ile kurulur.
+- `imza` klasörü imza anahtarıdır: silmeyin, paylaşmayın. GitHub'a yüklenmez.
+
+**İsteğe bağlı:** Supabase > SQL Editor'da `guncelleme_10.sql` (gelecek ay tahminleri için ayrı ayrı “fatura yükledi” bildirimi gitmez).
+
+- **Kredi kartı (Menü / Planla):** Ekstre yükleyince harcama kalemleri gösterilmez; yalnızca **bu ayın ödenecek toplamı** son ödeme tarihine kaydedilir, **kalan taksitlerin ay ay toplamı** gelecek aylara “tahmini ekstre” olarak yazılır (kartla yeni harcama yapılmayacağı varsayımıyla). O ayın gerçek ekstresi yüklenince tahmin gerçek tutarla değişir; aynı ekstre iki kez eklenmez.
+- **İadeler** artık harcama sayılmaz (eksi tutarlar, “İADE/İptal” kayıtları); iade edilen taksitli alışverişin kalan taksitleri gelecek aylara yazılmaz. Kart borcu ödemeleri de karışmaz.
+- Kart sayfasında sıradaki ödeme, “Ödedim” (eksik ödenirse kalan gelecek ayın tahminine eklenir), 8 aylık yük grafiği ve ödenmiş ekstreler. Elle eklenen taksitler varsa ayrıca görünür; ekstre yüklerken bunlar kapatılabilir (iki kez sayılmasın).
+- **Yanıp sönen uyarı:** Son ödeme günü gelen ya da geçen fatura, kart ekstresi, taksit ve düzenli ödemeler Özet'te, Faturalar'da, Planla'da ve kart sayfasında yanıp söner.

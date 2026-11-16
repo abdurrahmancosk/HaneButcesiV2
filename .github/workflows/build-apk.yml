@@ -39,12 +39,46 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: APK derle
+      # Kalici imza: her derleme ayni anahtarla imzalanir, boylece yeni APK eskisinin uzerine guncellenir.
+      # Anahtar GitHub secret'larinda durur (Imza_Kur.bat ile bir kez eklenir), depoya yuklenmez.
+      - name: Imza anahtari
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_SIFRE: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
+          if [ -n "$KS_B64" ] && [ -n "$KS_SIFRE" ]; then
+            printf '%s' "$KS_B64" | tr -d '\r\n ' | base64 -d > "$RUNNER_TEMP/hanebutcesi-imza.jks"
+            if keytool -list -keystore "$RUNNER_TEMP/hanebutcesi-imza.jks" -storepass "$KS_SIFRE" -alias upload >/dev/null 2>&1; then
+              echo "IMZA_VAR=1" >> "$GITHUB_ENV"
+              echo "IMZA_DURUM=Kalici imza: bu APK eskisinin uzerine Guncelle ile kurulur." >> "$GITHUB_ENV"
+            else
+              echo "::error::Imza anahtari acilamadi. ANDROID_KEYSTORE_PASSWORD secret'i yanlis olabilir; Imza_Kur.bat'i tekrar calistirin."
+              exit 1
+            fi
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD secret'lari yok. APK gecici anahtarla imzalaniyor (guncelleme cakisir). Imza_Kur.bat'i calistirin."
+            echo "IMZA_DURUM=UYARI - gecici imza: Imza_Kur.bat calistirilmamis, bu APK eski surumun uzerine kurulamayabilir." >> "$GITHUB_ENV"
+          fi
+
+      - name: APK derle
+        env:
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          SURUM=$(python -c "import re;print(re.search(r'SURUM\s*=\s*\"([0-9.]+)\"', open('main.py', encoding='utf-8').read()).group(1))")
+          KOD=$(python -c "import sys;a=(sys.argv[1].split('.')+['0','0'])[:3];print(int(a[0])*10000+int(a[1])*100+int(a[2]))" "$SURUM")
+          echo "Surum: $SURUM  (versionCode: $KOD)"
+          echo "SURUM=$SURUM" >> "$GITHUB_ENV"
+          IMZA=()
+          if [ "$IMZA_VAR" = "1" ]; then
+            IMZA=(--android-signing-key-store "$RUNNER_TEMP/hanebutcesi-imza.jks" --android-signing-key-alias upload)
+          fi
           flet build apk -vv --yes \
             --project "hanebutcesi2" \
             --product "Hane Bütçesi" \
             --org "com.evbutcesi" \
+            --build-version "$SURUM" --build-number "$KOD" \
+            "${IMZA[@]}" \
             --splash-color "#0f172a" --splash-dark-color "#0f172a" \
             --android-permissions android.permission.INTERNET=true android.permission.CAMERA=true android.permission.RECORD_AUDIO=true android.permission.POST_NOTIFICATIONS=true
 
@@ -52,6 +86,11 @@ jobs:
         run: |
           mkdir -p release_dist
           find build/apk -name "*.apk" -exec cp {} release_dist/HaneButcesi_v2.apk \;
+          ARAC=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          if [ -n "$ARAC" ]; then
+            echo "APK imza sertifikasi (her surumde ayni olmali):"
+            "$ARAC" verify --print-certs release_dist/HaneButcesi_v2.apk | grep -i "SHA-256" || true
+          fi
 
       - name: Artifact yukle
         uses: actions/upload-artifact@v4
@@ -65,7 +104,8 @@ jobs:
           tag_name: latest
           name: "Hane Bütçesi v2 - En Güncel Sürüm"
           body: |
-            GitHub tarafından otomatik derlendi.
+            GitHub tarafından otomatik derlendi. Sürüm ${{ env.SURUM }}.
+            ${{ env.IMZA_DURUM }}
             HaneButcesi_v2.apk dosyasını iki telefona da indirip kurun.
           files: release_dist/HaneButcesi_v2.apk
         env:
