@@ -2362,6 +2362,10 @@ class EkOzellikler4:
             a = self.ek_ders_ayari()
             y, m = self._ek_ders_ay(durum["ofset"])
             r = ak.ek_ders_tahmini(a, y, m, self.ek.get("tatiller") or None)
+            zincir = next((x for x in self.maas_tahminleri(4) if x["tur"] == "ekders"
+                           and (x["ait_yil"], x["ait_ay"]) == (y, m)), None)
+            if zincir:  # bordro girildiyse: yılbaşından beri biriken matrah ve aylık istisna ile gerçek vergi
+                r = {**r, "gv": zincir["gv"], "dv": zincir["dv"], "net": zincir["net"], "_zincir": True}
             ay_adi = f"{ui.AYLAR_UZUN[m - 1]} {y}"
             od = r["odeme_bas"]
             odeme = f"{r['odeme_bas'].day}–{r['odeme_bit'].day} {ui.AYLAR_UZUN[od.month - 1]}"
@@ -2428,8 +2432,10 @@ class EkOzellikler4:
             if not kompakt:
                 kutu.controls += [
                     yazi(detay, 11.5, renk=ui.SOLUK),
-                    yazi(f"Saat ücreti brüt {hb.tl(r['brut_saat'])} • gelir vergisi %{sa(a['gv_orani'])} − "
-                         f"{hb.tl(a.get('gv_istisna') or 0)} istisna = {hb.tl(r['gv'])} • damga {hb.tl(r['dv'])}. "
+                    yazi(f"Saat ücreti brüt {hb.tl(r['brut_saat'])} • gelir vergisi " +
+                         ("(son bordrodaki biriken matrahla) " if r.get("_zincir") else
+                          f"%{sa(a['gv_orani'])} − {hb.tl(a.get('gv_istisna') or 0)} istisna ") +
+                         f"= {hb.tl(r['gv'])} • damga {hb.tl(r['dv'])}. "
                          "ozkansoft.com EDUHEP 2026 ile aynı hesap; Ekim 2026 bordrosuyla kuruşu kuruşuna tuttu.",
                          10.5, renk=ui.SOLUK),
                     buton("Yattı – gelir olarak ekle", lambda e: self._ek_ders_gelir_ekle(r), ft.Icons.ADD_ROUNDED,
@@ -2514,3 +2520,123 @@ class EkOzellikler4:
         self._girdi_dialog("Ek ders ayarları",
                            [yazi("Haftalık program (puantajdaki gibi)", 13, True), *gunler.values(), *alanlar.values()],
                            kaydet)
+
+    # ================================================================== maaş tahmini (yalnızca yönetici)
+    BORDRO_ALANLARI = [("ay", "Bordronun ait olduğu ay (AA.YYYY)", "Örn. 11.2026"),
+                       ("gelir", "Gelir Toplamı", None), ("gv", "Gelir Vergisi", None), ("dv", "Damga Vergisi", None),
+                       ("net", "Net Ödenen", None), ("matrah", "Aylık Vergi Matrahı", None),
+                       ("gecen", "Geçen Aylar Vergi Matrahı Toplamı", None), ("dv_ist", "Damga Vergisi İstisna Tutarı", None)]
+
+    @staticmethod
+    def _ayda(ay):
+        ek = {1: "ta", 2: "ta", 3: "ta", 4: "da", 5: "ta", 6: "da", 7: "da", 8: "ta", 9: "de", 10: "de", 11: "da", 12: "ta"}
+        return f"{ui.AYLAR_UZUN[ay - 1]}'{ek[ay]}"
+
+    def maas_bordrosu(self):
+        b = self._yerel_ayar().get("maas_bordro")
+        return b if isinstance(b, dict) and b.get("gelir") else None
+
+    def maas_tahminleri(self, ay_sayisi=3):
+        b = self.maas_bordrosu()
+        if not b:
+            return []
+        try:
+            return ak.maas_zinciri(b, self.ek_ders_ayari(), self.ek.get("tatiller") or None, ay_sayisi)
+        except Exception as e:
+            print("Maaş tahmini hesaplanamadı:", e)
+            return []
+
+    def maas_karti(self, kompakt=False):
+        """Bir sonraki maaşın tahmini: son bordro + araya giren ek ders, ortak vergi matrahı ve asgari ücret istisnası."""
+        if not self.yonetici:
+            return None
+        bugun = hb.simdi().date()
+        z = self.maas_tahminleri(4)
+        ayar_btn = ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_size=20, tooltip="Son bordro bilgileri",
+                                 on_click=lambda e: self.maas_bordro_dialog())
+        if not z:
+            return kart(ft.Column([
+                ft.Row([simge_kutusu(ft.Icons.PAYMENTS_ROUNDED, GELIR, 18, 36), yazi("Tahmini maaş", 15, True, expand=True),
+                        ayar_btn], spacing=10),
+                yazi("Son maaş bordronuzdaki 8 rakamı girin (turkiye.gov.tr › Personel Bordro Bilgileri); gelecek ayın "
+                     "maaşı vergi dilimi ve ek dersle birlikte hesaplansın.", 12, renk=ui.SOLUK),
+                buton("Bordro bilgilerini gir", lambda e: self.maas_bordro_dialog(), ft.Icons.EDIT_NOTE_ROUNDED, tip="tonal")],
+                spacing=8), shadow=golge(0.5))
+        maaslar = [x for x in z if x["tur"] == "maas"]
+        hedef = next((x for x in maaslar if x["odeme"] >= bugun), maaslar[-1])
+        ek = next((x for x in z if x["tur"] == "ekders" and x["odeme"].year == hedef["odeme"].year
+                   and x["odeme"].month == hedef["odeme"].month), None)
+        ay_adi = f"{ui.AYLAR_UZUN[hedef['ait_ay'] - 1]} {hedef['ait_yil']}"
+        satirlar = [
+            ft.Row([simge_kutusu(ft.Icons.PAYMENTS_ROUNDED, GELIR, 18, 36),
+                    ft.Column([yazi("Tahmini maaş", 15, True),
+                               yazi(f"{ay_adi} • {hedef['odeme'].day} {self._ayda(hedef['odeme'].month)} yatar",
+                                    11.5, renk=ui.SOLUK)], spacing=0, expand=True), ayar_btn], spacing=10),
+            ft.Column([yazi(hb.tl(hedef["net"]), 24, "xb", renk=GELIR),
+                       yazi(f"gelir vergisi {hb.tl(hedef['gv'])} (%{hedef['dilim']} dilim) • damga {hb.tl(hedef['dv'])}",
+                            11.5, renk=ui.SOLUK)], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+        ]
+        if ek:
+            satirlar.append(yazi(
+                f"Önce {ek['odeme'].day} {self._ayda(ek['odeme'].month)} {ui.AYLAR_UZUN[ek['ait_ay'] - 1]} ek dersi "
+                f"(~{hb.tl(ek['net'])}, {ek['pansiyon']} pansiyon nöbeti) yatar; asgari ücret vergi istisnasını önce o "
+                f"kullanır, maaşa {hb.tl(hedef['istisna_gv'])} istisna kalır. Pansiyon nöbeti arttıkça maaştaki vergi artar.",
+                11.5, renk=ui.SOLUK))
+        if hedef.get("zam_haric"):
+            satirlar.append(yazi("⚠ Ocak / Temmuz zammı ve yeni yılın vergi tarifesi henüz bilinmiyor; o bordroyu "
+                                 "girince tahmin güncellenir.", 11.5, renk="#d97706"))
+        if not kompakt:
+            p = ak.maas_profili(self.maas_bordrosu())
+            satirlar.append(yazi(f"Son bordro: {p['ay']} • brüt {hb.tl(p['gelir'])} • sabit kesintiler (emeklilik + GSS) "
+                                 f"{hb.tl(p['sabit_kesinti'])} • yılbaşından beri vergi matrahı {hb.tl(p['kumulatif'])}. "
+                                 "İstisna ve damga tutarları ozkansoft.com EDUHEP 2026 ile aynı; Kasım 2026 bordrosu "
+                                 "kuruşu kuruşuna tuttu.", 10.5, renk=ui.SOLUK))
+            satirlar.append(buton("Yattı – gelir olarak ekle", lambda e: self._maas_gelir_ekle(hedef), ft.Icons.ADD_ROUNDED,
+                                  tip="tonal"))
+        return kart(ft.Column(satirlar, spacing=8), shadow=golge(0.5))
+
+    def _maas_gelir_ekle(self, h):
+        tur = next((t for t in self.gelir_turleri if t.lower().startswith("maaş")), None)
+        self.sekme = 2
+        self.ekrani_ciz(tur="Gelir", duzenlenen={
+            "tur": "Gelir", "tutar": h["net"], "kategori": tur, "firma": "MAAŞ", "tarih": hb.iso_tarih(hb.simdi()),
+            "urun": f"{ui.AYLAR_UZUN[h['ait_ay'] - 1]} Maaşı", "aciklama": "Tahmini tutar – bordrodaki net tutarla düzeltin"})
+        self.alt_menu_ciz()
+
+    def maas_bordro_dialog(self):
+        b = self.maas_bordrosu() or {}
+        alanlar = {}
+        for k, etiket, ipucu in self.BORDRO_ALANLARI:
+            v = b.get(k)
+            if k == "ay":
+                deger = (f"{str(v)[5:7]}.{str(v)[:4]}" if v else "")
+            else:
+                deger = "" if v is None else f"{float(v):.2f}".replace(".", ",")
+            alanlar[k] = ft.TextField(label=etiket, value=deger, dense=True, helper_text=ipucu,
+                                      keyboard_type=ft.KeyboardType.NUMBER)
+
+        def kaydet():
+            yeni = {}
+            for k, tf in alanlar.items():
+                v = (tf.value or "").strip()
+                if k == "ay":
+                    m = re.match(r"^(\d{1,2})[./-](\d{4})$", v)
+                    if not m or not 1 <= int(m.group(1)) <= 12:
+                        self.bildir("Ayı AA.YYYY biçiminde yazın (örn. 11.2026)", GIDER)
+                        return False
+                    yeni["ay"] = f"{m.group(2)}-{int(m.group(1)):02d}"
+                    continue
+                n = hb.tutar_coz(v) if v else 0.0
+                if n is None or n < 0:
+                    self.bildir(f"Geçersiz sayı: {tf.label}", GIDER)
+                    return False
+                yeni[k] = n
+            if not yeni.get("gelir") or not yeni.get("net"):
+                self.bildir("Gelir Toplamı ve Net Ödenen gerekli", GIDER)
+                return False
+            self._yerel_ayar_yaz(maas_bordro=yeni)
+            self.bildir("Bordro kaydedildi ✓ (yalnızca bu telefonda)", GELIR)
+            self.ekrani_ciz()
+        self._girdi_dialog("Son maaş bordrosu", [yazi("turkiye.gov.tr › Personel Bordro Bilgileri'ndeki rakamlar. "
+                                                      "Yalnızca bu telefonda saklanır.", 11.5, renk=ui.SOLUK),
+                                                 *alanlar.values()], kaydet)

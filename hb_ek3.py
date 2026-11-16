@@ -224,7 +224,7 @@ class EkOzellikler3:
                               for p in self.profiller.values()], spacing=6)]
         self.page.run_task(yukle)
         ciz()
-        ekders = [self.ek_ders_karti()] if self.yonetici and pid == self.ben["id"] else []
+        ekders = [self.maas_karti(), self.ek_ders_karti()] if self.yonetici and pid == self.ben["id"] else []
         return self._liste([ust, *secici, *[x for x in ekders if x], cipler, kutu])
 
     # ================================================================== varlıklar (altın / döviz)
@@ -1340,9 +1340,9 @@ class EkOzellikler3:
             satir = [yazi("Yaklaşan ödeme yok. Fatura yüklediğinizde son ödeme gününden önce hatırlatılır.", 12, renk=ui.SOLUK)]
         k.append(bolum(ft.Icons.EVENT_ROUNDED, "#d97706", "Yaklaşan ödemeler", "Faturalar", "faturalar", satir))
         if self.yonetici:  # Hatice gelirleri görmez
-            ek = self.ek_ders_karti(kompakt=True)
-            if ek is not None:
-                k.append(ek)
+            for ek in (self.maas_karti(kompakt=True), self.ek_ders_karti(kompakt=True)):
+                if ek is not None:
+                    k.append(ek)
         # bütçe
         bsatir = []
         for pid in ([self.ben["id"]] if not self.yonetici else list(self.profiller)):

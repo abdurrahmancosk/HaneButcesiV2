@@ -1654,3 +1654,92 @@ def hb_tarih(iso) -> dt.date:
         return d.date()
     except Exception:
         return dt.date.fromisoformat(s[:10])
+
+
+# ================================================================== maaş tahmini (bordro + ek ders, ortak vergi matrahı)
+# Gelir vergisi tarifesi (ücret). 2026: 190.000 / 400.000 / 1.500.000 / 5.300.000 – Kasım 2026 bordrosuyla doğrulandı.
+VERGI_DILIMLERI = {2026: [(190000, 15), (400000, 20), (1500000, 27), (5300000, 35), (None, 40)]}
+# Asgari ücret (brüt) – damga istisna matrahı ve gelir vergisi istisnasının kaynağı (ozkansoft EDUHEP: 33.030 / 5.615,10).
+ASGARI_BRUT = {2026: 33030.0}
+DAMGA_ORANI = 0.759
+
+
+def _dilimler(yil):
+    return VERGI_DILIMLERI.get(yil) or VERGI_DILIMLERI[max(k for k in VERGI_DILIMLERI if k <= yil)] \
+        if any(k <= yil for k in VERGI_DILIMLERI) else VERGI_DILIMLERI[min(VERGI_DILIMLERI)]
+
+
+def gelir_vergisi(onceki: float, matrah: float, yil: int) -> float:
+    """Kümülatif matrahı 'onceki' olan kişinin bu 'matrah' için ödeyeceği gelir vergisi (artan oranlı)."""
+    vergi, alt, kalan, k = 0.0, 0.0, max(matrah, 0), max(onceki, 0)
+    for ust, oran in _dilimler(yil):
+        ust = float("inf") if ust is None else ust
+        if k < ust and kalan > 0:
+            pay = min(kalan, ust - k)
+            vergi += pay * oran / 100
+            kalan -= pay
+            k += pay
+        alt = ust
+    return round(vergi, 2)
+
+
+def asgari_istisna(yil: int, ay: int) -> tuple[float, float]:
+    """(gelir vergisi istisnası ₺, damga vergisi istisnası ₺) – o takvim ayında ödenen tüm ücretler paylaşır."""
+    brut = ASGARI_BRUT.get(yil) or ASGARI_BRUT[max(ASGARI_BRUT)]
+    matrah = round(brut * 0.85, 2)                        # %14 SGK + %1 işsizlik düşülür
+    gv = gelir_vergisi(matrah * (ay - 1), matrah, yil if yil in VERGI_DILIMLERI else max(VERGI_DILIMLERI))
+    return gv, round(brut * DAMGA_ORANI / 100, 2)
+
+
+def maas_profili(b: dict) -> dict:
+    """Bordrodaki 8 rakamdan (Gelir Toplamı, Gelir V., Damga V., Net, Aylık Vergi Matrahı, Geçen Aylar Matrahı,
+    Damga V. İstisna Tutarı, ay) sabit kesintiyi ve damga matrahını çıkarır."""
+    gelir, gv, dv, net = (float(b.get(k) or 0) for k in ("gelir", "gv", "dv", "net"))
+    return {**b, "sabit_kesinti": round(gelir - net - gv - dv, 2),
+            "damga_matrah": round((dv + float(b.get("dv_ist") or 0)) / (DAMGA_ORANI / 100), 2),
+            "kumulatif": round(float(b.get("gecen") or 0) + float(b.get("matrah") or 0), 2)}
+
+
+def maas_zinciri(bordro: dict, ek_ders_ayar: dict | None, tatiller=None, ay_sayisi: int = 2) -> list[dict]:
+    """Son bordrodan sonraki ödemeleri sırayla hesaplar: her ayın 5–8'inde geçen ayın ek dersi, 15'inde o ayın maaşı.
+    Gelir vergisi istisnası önce ek derse, kalanı maaşa uygulanır; matrah yıl içinde birikir (Ocak'ta sıfırlanır).
+    Maaş tutarı son bordrodaki gibi kabul edilir (Ocak / Temmuz zamları hariç)."""
+    p = maas_profili(bordro)
+    y, m = (int(x) for x in str(p["ay"]).split("-"))
+    kum, kum_yil = p["kumulatif"], y
+    sonuc = []
+    for _ in range(ay_sayisi):
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+        if y != kum_yil:
+            kum, kum_yil = 0.0, y
+        gv_ist, dv_ist = asgari_istisna(y, m)
+        vy = y if y in VERGI_DILIMLERI else max(VERGI_DILIMLERI)
+        # 1) geçen ayın ek dersi (5–8'i)
+        ey, em = (y - 1, 12) if m == 1 else (y, m - 1)
+        e = ek_ders_tahmini(ek_ders_ayar, ey, em, tatiller) if ek_ders_ayar is not None else None
+        if e:
+            b = e["brut"]
+            ham = gelir_vergisi(kum, b, vy)
+            e_gv = round(max(ham - gv_ist, 0), 2)
+            gv_ist = round(max(gv_ist - ham, 0), 2)
+            ham_dv = round(b * DAMGA_ORANI / 100, 2)
+            e_dv = round(max(ham_dv - dv_ist, 0), 2)
+            dv_ist = round(max(dv_ist - ham_dv, 0), 2)
+            kum = round(kum + b, 2)
+            sonuc.append({"tur": "ekders", "ait_yil": ey, "ait_ay": em, "odeme": e["odeme_bas"], "brut": b,
+                          "gv": e_gv, "dv": e_dv, "net": round(b - e_gv - e_dv, 2), "saat": e["saat"],
+                          "pansiyon": e["pansiyon"], "kumulatif_sonra": kum})
+        # 2) bu ayın maaşı (15'i)
+        mat = float(p["matrah"])
+        ham = gelir_vergisi(kum, mat, vy)
+        m_gv = round(max(ham - gv_ist, 0), 2)
+        ham_dv = round(float(p["damga_matrah"]) * DAMGA_ORANI / 100, 2)
+        m_dv = round(max(ham_dv - dv_ist, 0), 2)
+        onceki_kum = kum
+        kum = round(kum + mat, 2)
+        net = round(float(p["gelir"]) - float(p["sabit_kesinti"]) - m_gv - m_dv, 2)
+        oran = next(o for u, o in _dilimler(vy) if u is None or kum <= u)
+        sonuc.append({"tur": "maas", "ait_yil": y, "ait_ay": m, "odeme": dt.date(y, m, 15), "brut": float(p["gelir"]),
+                      "gv": m_gv, "dv": m_dv, "net": net, "istisna_gv": round(min(ham, gv_ist), 2), "dilim": oran,
+                      "kumulatif_sonra": kum, "zam_haric": y != int(str(p["ay"])[:4]) or (m == 7)})
+    return sonuc
