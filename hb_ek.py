@@ -720,6 +720,11 @@ class EkOzellikler:
         return ak.FATURA_TURLERI[:-1] + ozel + ["Diğer"]
 
     async def fatura_isle(self, veri, tip):
+        if tip == "pdf" and self.yonetici:
+            metin = await self.arka(ak.pdf_metni, veri)
+            if ak.bordro_mu(metin):
+                await self.bordrolari_isle([veri])
+                return
         if tip == "pdf":
             sifreli = await self.arka(ak.pdf_sifreli_mi, veri)
             if sifreli or ak.ekstre_mi(await self.arka(ak.pdf_metni, veri)):
@@ -1306,11 +1311,12 @@ class EkOzellikler:
         return self.ayarlar_ekrani()
 
     # ================================================================== dosya seçme / kaydetme
-    async def dosya_sec(self, tip):
+    async def dosya_sec(self, tip, coklu=False):
+        """Seçilen dosyanın baytları; coklu=True ise bayt listesi."""
         if not self.picker:
             self.bildir("Dosya seçici kullanılamıyor.", GIDER)
             return None
-        kw = dict(allow_multiple=False)
+        kw = dict(allow_multiple=bool(coklu))
         kw.update(file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=["pdf"]) if tip == "pdf" else \
             kw.update(file_type=ft.FilePickerFileType.IMAGE)
         try:
@@ -1326,16 +1332,21 @@ class EkOzellikler:
         dosyalar = sonuc if isinstance(sonuc, list) else getattr(sonuc, "files", None)
         if not dosyalar:
             return None
-        f = dosyalar[0]
-        veri = getattr(f, "bytes", None)
-        if not veri and getattr(f, "path", None):
-            try:
-                with open(f.path, "rb") as fp:
-                    veri = fp.read()
-            except Exception as e:
-                self.bildir(f"Dosya okunamadı: {e}", GIDER)
-                return None
-        return bytes(veri) if veri else None
+        sonuclar = []
+        for f in (dosyalar if coklu else dosyalar[:1]):
+            veri = getattr(f, "bytes", None)
+            if not veri and getattr(f, "path", None):
+                try:
+                    with open(f.path, "rb") as fp:
+                        veri = fp.read()
+                except Exception as e:
+                    self.bildir(f"Dosya okunamadı: {e}", GIDER)
+                    continue
+            if veri:
+                sonuclar.append(bytes(veri))
+        if coklu:
+            return sonuclar or None
+        return sonuclar[0] if sonuclar else None
 
     async def dosya_kaydet(self, ad, veri: bytes):
         if not self.picker:

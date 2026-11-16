@@ -1721,6 +1721,14 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         if tip == "pdf":
             sifreli = await self.arka(ak.pdf_sifreli_mi, veri)
             metin = "" if sifreli else await self.arka(ak.pdf_metni, veri)
+            if ak.bordro_mu(metin):
+                self.fis = None
+                if self.yonetici:
+                    self.sekmeye_git(0)
+                    await self.bordrolari_isle([veri])  # telefonda okunur; Gemini'ye gönderilmez
+                else:
+                    self.bildir("Bu bir maaş bordrosu; fiş olarak okunmadı", GIDER)
+                return
             if sifreli or ak.ekstre_mi(metin):
                 # banka hesap özetleri genelde şifreli PDF'tir: fiş yerine ekstre olarak işle
                 self.fis = None

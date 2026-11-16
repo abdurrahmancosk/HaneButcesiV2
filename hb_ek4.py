@@ -2552,15 +2552,18 @@ class EkOzellikler4:
             return None
         bugun = hb.simdi().date()
         z = self.maas_tahminleri(4)
-        ayar_btn = ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_size=20, tooltip="Son bordro bilgileri",
+        ayar_btn = ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_size=20, tooltip="Bordro bilgilerini elle düzelt",
                                  on_click=lambda e: self.maas_bordro_dialog())
+        yukle_btn = buton("Bordro PDF'i yükle", lambda e: self.page.run_task(self.bordro_yukle),
+                          ft.Icons.UPLOAD_FILE_ROUNDED, tip="tonal")
         if not z:
             return kart(ft.Column([
                 ft.Row([simge_kutusu(ft.Icons.PAYMENTS_ROUNDED, GELIR, 18, 36), yazi("Tahmini maaş", 15, True, expand=True),
                         ayar_btn], spacing=10),
-                yazi("Son maaş bordronuzdaki 8 rakamı girin (turkiye.gov.tr › Personel Bordro Bilgileri); gelecek ayın "
-                     "maaşı vergi dilimi ve ek dersle birlikte hesaplansın.", 12, renk=ui.SOLUK),
-                buton("Bordro bilgilerini gir", lambda e: self.maas_bordro_dialog(), ft.Icons.EDIT_NOTE_ROUNDED, tip="tonal")],
+                yazi("e-Devlet › Personel Bordro Bilgileri'nden son bordronuzun PDF'ini yükleyin (birden çok seçebilirsiniz); "
+                     "gelecek ayın maaşı vergi dilimi ve ek dersle birlikte hesaplansın. PDF telefonda okunur, "
+                     "hiçbir yere gönderilmez.", 12, renk=ui.SOLUK),
+                yukle_btn],
                 spacing=8), shadow=golge(0.5))
         maaslar = [x for x in z if x["tur"] == "maas"]
         hedef = next((x for x in maaslar if x["odeme"] >= bugun), maaslar[-1])
@@ -2591,8 +2594,8 @@ class EkOzellikler4:
                                  f"{hb.tl(p['sabit_kesinti'])} • yılbaşından beri vergi matrahı {hb.tl(p['kumulatif'])}. "
                                  "İstisna ve damga tutarları ozkansoft.com EDUHEP 2026 ile aynı; Kasım 2026 bordrosu "
                                  "kuruşu kuruşuna tuttu.", 10.5, renk=ui.SOLUK))
-            satirlar.append(buton("Yattı – gelir olarak ekle", lambda e: self._maas_gelir_ekle(hedef), ft.Icons.ADD_ROUNDED,
-                                  tip="tonal"))
+            satirlar.append(ft.Row([yukle_btn, buton("Yattı – gelir ekle", lambda e: self._maas_gelir_ekle(hedef),
+                                                     ft.Icons.ADD_ROUNDED, tip="tonal")], wrap=True, spacing=8))
         return kart(ft.Column(satirlar, spacing=8), shadow=golge(0.5))
 
     def _maas_gelir_ekle(self, h):
@@ -2640,3 +2643,35 @@ class EkOzellikler4:
         self._girdi_dialog("Son maaş bordrosu", [yazi("turkiye.gov.tr › Personel Bordro Bilgileri'ndeki rakamlar. "
                                                       "Yalnızca bu telefonda saklanır.", 11.5, renk=ui.SOLUK),
                                                  *alanlar.values()], kaydet)
+
+    async def bordro_yukle(self, e=None):
+        dosyalar = await self.dosya_sec("pdf", coklu=True)
+        if dosyalar:
+            await self.bordrolari_isle(dosyalar)
+
+    async def bordrolari_isle(self, dosyalar):
+        """Bordro PDF'lerini telefonda okur (pypdf); en son ayın bordrosu tahmine esas alınır."""
+        okunan = []
+        for v in dosyalar:
+            try:
+                okunan.append(ak.bordro_coz(await self.arka(ak.pdf_metni, v)))
+            except Exception as ex:
+                print("Bordro okunamadı:", ex)
+        okunan = [b for b in okunan if b]
+        if not okunan:
+            self.bildir("Bu PDF'te bordro bilgisi bulunamadı (e-Devlet › Personel Bordro Bilgileri PDF'i olmalı)", GIDER)
+            return
+        eski = self.maas_bordrosu()
+        if eski and eski.get("ay", "") > max(b["ay"] for b in okunan):
+            self.bildir(f"Kayıtlı bordro ({eski['ay']}) daha yeni; değiştirilmedi", GIDER)
+            return
+        if eski and eski.get("ay") == max(b["ay"] for b in okunan) and eski.get("_pdf"):
+            okunan.append({k: v for k, v in eski.items() if k != "fark_bordro"})
+        b = ak.bordro_sec(okunan)
+        b["_pdf"] = True
+        self._yerel_ayar_yaz(maas_bordro=b)
+        y, m = (int(x) for x in b["ay"].split("-"))
+        self.bildir(f"✓ {ui.AYLAR_UZUN[m - 1]} {y} bordrosu okundu • net {hb.tl(b['net'])}"
+                    + (f" (+{b['fark_bordro']} fark bordrosu)" if b.get("fark_bordro") else "")
+                    + " • sonraki maaş hesaplandı", GELIR)
+        self.ekrani_ciz()

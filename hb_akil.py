@@ -1743,3 +1743,52 @@ def maas_zinciri(bordro: dict, ek_ders_ayar: dict | None, tatiller=None, ay_sayi
                       "gv": m_gv, "dv": m_dv, "net": net, "istisna_gv": round(min(ham, gv_ist), 2), "dilim": oran,
                       "kumulatif_sonra": kum, "zam_haric": y != int(str(p["ay"])[:4]) or (m == 7)})
     return sonuc
+
+
+# ---------------------------------------------------------------- e-Devlet "Personel Bordro Bilgileri" PDF'i
+def bordro_mu(metin: str) -> bool:
+    return "PERSONEL BORDRO" in (metin or "").upper() and "Net Ödenen" in (metin or "")
+
+
+def bordro_coz(metin: str) -> dict | None:
+    """e-Devlet bordro PDF metninden tahmin için gereken rakamlar (telefonda okunur, hiçbir yere gönderilmez).
+    Kimlik / sicil gibi kişisel bilgiler alınmaz."""
+    if not bordro_mu(metin):
+        return None
+
+    def sayi(desen):
+        m = re.search(desen + r"\s*(-?\d+(?:\.\d+)?)", metin)
+        return float(m.group(1)) if m else 0.0
+
+    ay = re.search(r"Ait Olduğu Ay\s*(\d{1,2})", metin)
+    yil = re.search(r"Bütçe Yılı\s*(\d{4})", metin)
+    if not ay or not yil:
+        return None
+    b = {"ay": f"{yil.group(1)}-{int(ay.group(1)):02d}",
+         "gelir": sayi(r"Gelir Toplamı"), "gv": sayi(r"Gelir Vergisi"), "dv": sayi(r"Damga Vergisi"),
+         "net": sayi(r"Net Ödenen"), "matrah": sayi(r"Aylık Vergi Matrahı"),
+         "gecen": sayi(r"Geçen Aylar Vergi Matrahı\s*(?:Toplamı)?"), "dv_ist": sayi(r"Damga Vergisi Istisna Tutarı")}
+    b["kumulatif"] = round(b["gecen"] + b["matrah"], 2)
+    return b if b["gelir"] > 0 and b["net"] > 0 else None
+
+
+def bordro_sec(bordrolar: list[dict]) -> dict | None:
+    """Birden çok bordrodan tahmine esas olanı seçer: en son ayın asıl bordrosu (en büyük gelirli). Aynı ay içindeki
+    fark bordrolarının matrahı yılbaşından beri biriken matraha eklenir."""
+    tekil = {}
+    for b in bordrolar:  # aynı bordro iki kez yüklendiyse bir sayılır
+        if b:
+            k = (b["ay"], round(b["gelir"], 2), round(b["net"], 2), round(b["matrah"], 2))
+            if k not in tekil or (b.get("kumulatif") or 0) > (tekil[k].get("kumulatif") or 0):
+                tekil[k] = b
+    bordrolar = list(tekil.values())
+    if not bordrolar:
+        return None
+    son_ay = max(b["ay"] for b in bordrolar)
+    ayni = [b for b in bordrolar if b["ay"] == son_ay]
+    asil = dict(max(ayni, key=lambda b: b["gelir"]))
+    kum = max(b.get("kumulatif") or (b["gecen"] + b["matrah"]) for b in ayni)
+    asil["gecen"] = round(kum - asil["matrah"], 2)   # maas_profili kümülatifi buradan hesaplar
+    asil["kumulatif"] = round(kum, 2)
+    asil["fark_bordro"] = len(ayni) - 1
+    return asil
