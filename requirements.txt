@@ -1,4 +1,4 @@
-flet
+flet>=1.0.0
 flet-camera
 flet-audio-recorder
 flet-local-auth
@@ -8,3 +8,4 @@ certifi
 pillow
 openpyxl
 pypdf
+python-dotenv

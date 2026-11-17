@@ -24,13 +24,22 @@ import urllib.parse
 import urllib.request
 import uuid
 
+# .env dosyasını yükle (python-dotenv varsa)
+try:
+    from dotenv import load_dotenv
+    _env_dosya = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(_env_dosya):
+        load_dotenv(_env_dosya)
+except ImportError:
+    pass
+
 # ----------------------------------------------------------------------------
 # Yapılandırma
 # ----------------------------------------------------------------------------
-SUPABASE_URL = "https://ivngkowxxafkyvvzhdob.supabase.co"
-SUPABASE_KEY = "sb_publishable_0pVRLE1ceJ0FlI32XGzbsw_Z_mldcXe"
-EPOSTA_ALANI = "hane.app"          # kullanıcı adı -> abdurrahman@hane.app
-FIS_KOVASI = "hb-fisler"
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ivngkowxxafkyvvzhdob.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_0pVRLE1ceJ0FlI32XGzbsw_Z_mldcXe")
+EPOSTA_ALANI = os.getenv("EPOSTA_ALANI", "hane.app")
+FIS_KOVASI = os.getenv("FIS_KOVASI", "hb-fisler")
 TZ = dt.timezone(dt.timedelta(hours=3))  # Türkiye (yaz saati yok)
 
 VARSAYILAN_KATEGORILER = [

@@ -66,8 +66,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         except Exception:
             pass
         try:
-            page.fonts = {"Inter": "fonts/Inter-Regular.otf", "InterSB": "fonts/Inter-SemiBold.otf",
-                          "InterB": "fonts/Inter-Bold.otf", "InterXB": "fonts/Inter-ExtraBold.otf"}
+            page.fonts = {"Inter": "assets/fonts/Inter-Regular.otf", "InterSB": "assets/fonts/Inter-SemiBold.otf",
+                          "InterB": "assets/fonts/Inter-Bold.otf", "InterXB": "assets/fonts/Inter-ExtraBold.otf"}
         except Exception:
             pass
         self.tema_modu_uygula()  # varsayılan: cihazın teması

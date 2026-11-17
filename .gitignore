@@ -8,3 +8,5 @@ imza/
 *.jks
 *.keystore
 *.p12
+.env
+.env.local
