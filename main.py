@@ -634,6 +634,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
 
         self.page.run_task(self.bildirim_acilis)
         self.page.run_task(self.sunucu_gorevleri)
+        self.page.run_task(self.guncelleme_kontrol)
         self.canli = hb.CanliBaglanti(self.supa, self.canli_degisiklik, self.canli_durum)
         self.page.run_task(self.canli.calistir)
         self._nesil += 1
@@ -756,6 +757,31 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             await asyncio.sleep(20 if not (self.canli and self.canli.bagli) else 120)
             if self.ben and (self.sekme in (0, 1) or self.bekleyenler or self.cevrimdisi):
                 await self.verileri_yenile(sessiz=True)
+
+    async def guncelleme_kontrol(self):
+        """Arka planda GitHub'ta yeni sürüm kontrol et (günde 1 kez)."""
+        import time
+        son_kontrol = 0
+        while self.ben:
+            await asyncio.sleep(3600)  # 1 saat
+            su_an = time.time()
+            # Günde 1 kez kontrol et (86400 saniye = 24 saat)
+            if su_an - son_kontrol < 86400:
+                continue
+            son_kontrol = su_an
+            try:
+                guncelleme = await self.arka(hb.guncelleme_kontrol_et, SURUM)
+                if guncelleme:
+                    self.bildir(
+                        f"🎉 Yeni sürüm: {guncelleme['tag']} | Güncelleme başlıyor…",
+                        renk="#16a34a"
+                    )
+                    # APK'yı indir ve kur (arka planda)
+                    await self.arka(hb.apk_indir_ve_kur, guncelleme["indir_url"])
+                    self.bildir("✅ Güncelleme hazır! Lütfen uygulamayı yeniden başlatın.", renk="#16a34a")
+            except Exception as e:
+                # Sessiz fail - güncellemeler opsiyonel
+                pass
 
     # ------------------------------------------------------------ gezinme
     async def sekme_degisti(self, e):

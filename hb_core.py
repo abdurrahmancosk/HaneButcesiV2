@@ -946,3 +946,67 @@ class UcluHesap:
         if self.oto == "b" or (b is None and m and t):
             return round(t / m, 2) if m and t else b
         return round(b, 2) if b else None
+
+
+# ============================================================================
+# Otomatik güncelleme (GitHub Releases)
+# ============================================================================
+def guncelleme_kontrol_et(surum_mevcud: str) -> dict | None:
+    """GitHub Releases'ı kontrol et, yeni sürüm varsa bilgi döndür.
+    Dönüş: {'tag': '2.18.0', 'indir_url': '...apk', 'aciklama': '...'} ya da None"""
+    try:
+        j = _http("GET", "https://api.github.com/repos/abdurrahmancosk/HaneButcesiV2/releases/latest", zaman_asimi=10)
+        yeni_surum = j.get("tag_name", "").lstrip("v")
+        apk_dosyasi = None
+        for asset in j.get("assets") or []:
+            if asset.get("name", "").endswith(".apk"):
+                apk_dosyasi = asset.get("browser_download_url")
+                break
+
+        if not yeni_surum or not apk_dosyasi:
+            return None
+
+        # Versiyon karşılaştır (2.17.0 vs 2.18.0)
+        def ver_karsilastir(v1, v2):
+            return tuple(map(int, v1.split("."))) < tuple(map(int, v2.split(".")))
+
+        if ver_karsilastir(surum_mevcud, yeni_surum):
+            return {"tag": yeni_surum, "indir_url": apk_dosyasi, "aciklama": j.get("body", "")}
+    except Exception:
+        pass
+    return None
+
+
+def apk_indir_ve_kur(indir_url: str, yerel_dosya: str = None) -> bool:
+    """APK'yı indir ve kurulum başlat. Android Intent ile kurulum yapılır."""
+    try:
+        import sys
+        yerel_dosya = yerel_dosya or os.path.join(veri_klasoru(), "HaneButcesi_yeni.apk")
+
+        # İndir
+        def ilerleme(blok, blok_boyutu, toplam):
+            pass  # sessiz indir
+        urllib.request.urlretrieve(indir_url, yerel_dosya, ilerleme)
+
+        # Android: kurulum Intent'i başlat
+        if getattr(sys, "platform", "").lower() == "android" or "android" in str(sys.platform).lower():
+            try:
+                from android.app import PythonActivity
+                from android.content import Intent
+                from android.net import Uri
+
+                aktivite = PythonActivity.mActivity
+                intent = Intent("android.intent.action.INSTALL_PACKAGE")
+                uri = Uri.fromFile(yerel_dosya)
+                intent.setData(uri)
+                intent.putExtra("android.intent.extra.NOT_UNKNOWN_SOURCE", True)
+                aktivite.startActivity(intent)
+                return True
+            except Exception:
+                # Fallback: file manager açılır, kullanıcı manuel kurulum yapar
+                import webbrowser
+                webbrowser.open(f"file://{yerel_dosya}")
+                return True
+    except Exception:
+        pass
+    return False
