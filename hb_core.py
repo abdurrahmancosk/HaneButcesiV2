@@ -984,29 +984,29 @@ def apk_indir_ve_kur(indir_url: str, yerel_dosya: str = None) -> bool:
         yerel_dosya = yerel_dosya or os.path.join(veri_klasoru(), "HaneButcesi_yeni.apk")
 
         # İndir
-        def ilerleme(blok, blok_boyutu, toplam):
-            pass  # sessiz indir
-        urllib.request.urlretrieve(indir_url, yerel_dosya, ilerleme)
+        try:
+            urllib.request.urlretrieve(indir_url, yerel_dosya)
+        except Exception:
+            return False
 
         # Android: kurulum Intent'i başlat
-        if getattr(sys, "platform", "").lower() == "android" or "android" in str(sys.platform).lower():
+        is_android = "android" in str(getattr(sys, "platform", "")).lower()
+        if is_android:
             try:
                 from android.app import PythonActivity
                 from android.content import Intent
                 from android.net import Uri
 
                 aktivite = PythonActivity.mActivity
-                intent = Intent("android.intent.action.INSTALL_PACKAGE")
+                intent = Intent("android.intent.action.VIEW")
                 uri = Uri.fromFile(yerel_dosya)
                 intent.setData(uri)
+                intent.setType("application/vnd.android.package-archive")
                 intent.putExtra("android.intent.extra.NOT_UNKNOWN_SOURCE", True)
                 aktivite.startActivity(intent)
                 return True
             except Exception:
-                # Fallback: file manager açılır, kullanıcı manuel kurulum yapar
-                import webbrowser
-                webbrowser.open(f"file://{yerel_dosya}")
-                return True
+                return False
+        return True
     except Exception:
-        pass
-    return False
+        return False

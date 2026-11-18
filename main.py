@@ -14,7 +14,7 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.17.0"
+SURUM = "2.18.0"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler

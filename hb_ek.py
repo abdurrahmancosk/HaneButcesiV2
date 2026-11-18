@@ -24,24 +24,7 @@ FATURA_SIMGE = {"Elektrik": ("BOLT", "#f59e0b"), "Su": ("WATER_DROP", "#0ea5e9")
                 "Kira": ("HOME", "#0f766e"), "Kredi kartı": ("CREDIT_CARD", "#4f46e5"), "Sigorta": ("SHIELD", "#0891b2"),
                 "Diğer": ("RECEIPT_LONG", "#64748b")}
 
-MENU = [  # anahtar, başlık, açıklama, simge, renk
-    ("bildirimler", "Bildirimler", "Eşinizin eklediği kayıtlar, hatırlatmalar", "NOTIFICATIONS_ROUNDED", "#e11d48"),
-    ("faturalar", "Faturalar", "Yükle, hatırlat, zam/kullanım analizi", "RECEIPT_LONG_ROUNDED", "#f59e0b"),
-    ("alisveris", "Alışveriş listesi", "Ortak, anlık liste", "CHECKLIST_ROUNDED", "#16a34a"),
-    ("butceler", "Bütçe limitleri", "Kategori sınırları ve uyarılar", "DONUT_LARGE_ROUNDED", "#e11d48"),
-    ("hedefler", "Birikim hedefleri", "Tatil, araba, acil durum…", "SAVINGS_ROUNDED", "#ca8a04"),
-    ("borclar", "Borç / alacak", "Kime ne verildi, kimden ne alınacak", "HANDSHAKE_ROUNDED", "#2563eb"),
-    ("taksitler", "Kredi kartı", "Ekstre, aylık ödeme, gelecek aylar", "CREDIT_CARD_ROUNDED", "#4f46e5"),
-    ("abonelikler", "Abonelikler", "Su, doğalgaz, internet… e-postadan otomatik", "MARK_EMAIL_READ_ROUNDED", "#ea4335"),
-    ("aliskanlik", "Akıllı bütçe", "Ne sıklıkla ne alıyoruz, gidişat, öneriler", "INSIGHTS_ROUNDED", "#7c3aed"),
-    ("sohbet", "Hane sohbeti", "Mesaj, para isteği, kayda yorum", "FORUM_ROUNDED", "#0d9488"),
-    ("fiyatlar", "Fiyat takibi", "Ürün fiyatları, güncel market fiyatları", "PRICE_CHECK_ROUNDED", "#0891b2"),
-    ("varliklar", "Altın & döviz", "Elinizdeki altın/döviz, güncel değeri", "DIAMOND_ROUNDED", "#ca8a04"),
-    ("yil_ozeti", "Yıl özeti", "Yılın hikayesi: en çok, en büyük, en tasarruflu", "CELEBRATION_ROUNDED", "#0d9488"),
-    ("kasa", "Kasa hareketleri", "Gelirler, aktarımlar, tüm geçmiş", "ACCOUNT_BALANCE_WALLET_ROUNDED", "#0f766e"),
-    (“rapor”, “Akıllı rapor”, “Dönem karşılaştırma, Excel / PDF”, “INSIGHTS_ROUNDED”, “#7c3aed”),
-    (“ayarlar”, “Ayarlar”, “Tema, PIN, şifre, yapay zeka”, “SETTINGS_ROUNDED”, “#475569”),
-]
+MENU = []  # Menu itemleri asistan kaldirildi - bosu liste
 
 
 _UZERI_CIZILI = getattr(getattr(ft, "TextDecoration", None), "LINE_THROUGH", None)
