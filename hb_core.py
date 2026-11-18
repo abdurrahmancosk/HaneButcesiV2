@@ -38,7 +38,7 @@ except ImportError:
 # ----------------------------------------------------------------------------
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ivngkowxxafkyvvzhdob.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_0pVRLE1ceJ0FlI32XGzbsw_Z_mldcXe")
-EPOSTA_ALANI = os.getenv("EPOSTA_ALANI", "hane.app")
+EPOSTA_ALANI = os.getenv("EPOSTA_ALANI", "hane.app")          # kullanıcı adı -> abdurrahman@hane.app
 FIS_KOVASI = os.getenv("FIS_KOVASI", "hb-fisler")
 TZ = dt.timezone(dt.timedelta(hours=3))  # Türkiye (yaz saati yok)
 
@@ -669,6 +669,47 @@ def gemini_modelleri(api_anahtari: str) -> list[str]:
     return sirali
 
 
+GECICI_HATALAR = {0, 408, 429, 500, 502, 503, 504}   # bağlantı / zaman aşımı / Google yoğun
+
+
+def gemini_model_sirasi(api_anahtari: str) -> list[str]:
+    """Denenecek modeller: hesabın en yeni flash modelleri + yedekler; aynı sürümden en çok 2 (biri yoğunsa
+    farklı nesil denenir), en çok 6 model."""
+    sira, sayac = [], {}
+    for m in list(gemini_modelleri(api_anahtari)) + YEDEK_MODELLER:
+        if m in sira:
+            continue
+        v = (re.search(r"gemini-(\d+(?:\.\d+)?)", m) or [None, m])[1]
+        if sayac.get(v, 0) >= 2:
+            continue
+        sayac[v] = sayac.get(v, 0) + 1
+        sira.append(m)
+    return sira[:6]
+
+
+def gemini_istegi(model: str, govde: dict, api_anahtari: str, zaman_asimi: int = 90, deneme: int = 2) -> dict:
+    """Tek modele istek; Google 'yoğun' (503/429) ya da bağlantı hatasında artan beklemeyle yeniden dener."""
+    for i in range(deneme):
+        try:
+            return _http("POST", f"{GEMINI_TABAN}/models/{model}:generateContent", govde=govde,
+                         basliklar={"x-goog-api-key": api_anahtari}, zaman_asimi=zaman_asimi)
+        except ApiHatasi as e:
+            if e.durum not in GECICI_HATALAR or i == deneme - 1:
+                raise
+            time.sleep((2.0, 5.0, 8.0)[min(i, 2)])
+
+
+def gemini_hata_mesaji(hatalar: list[tuple[str, ApiHatasi | Exception]], baslik: str) -> ApiHatasi:
+    """Tüm modeller başarısızsa anlaşılır Türkçe mesaj."""
+    if hatalar and all(isinstance(e, ApiHatasi) and e.durum in GECICI_HATALAR for _, e in hatalar):
+        baglanti = all(e.durum == 0 for _, e in hatalar)
+        return ApiHatasi(503, ("İnternet bağlantısı yok ya da çok yavaş." if baglanti else
+                               "Google Gemini şu an çok yoğun (tüm modeller denendi).")
+                         + " Birkaç dakika sonra «Tekrar oku»ya basın ya da ürünleri elle girin.")
+    son = hatalar[-1] if hatalar else ("?", "bilinmeyen hata")
+    return ApiHatasi(500, f"{baslik} ({son[0]}: {getattr(son[1], 'mesaj', son[1])})")
+
+
 def _fis_istemi(kategoriler: list[str]) -> str:
     return f"""Sen uzman bir Türk market fişi / fatura analiz asistanısın. Görseldeki belgeyi oku ve YALNIZCA geçerli JSON döndür.
 JSON yapısı:
@@ -704,23 +745,22 @@ def fis_analiz_et(gorsel: bytes, mime: str, api_anahtari: str, kategoriler: list
                                 {"inline_data": {"mime_type": mime, "data": base64.b64encode(gorsel).decode()}}]}],
         "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"},
     }
-    son_hata = "bilinmeyen hata"
-    for model in gemini_modelleri(api_anahtari):
+    hatalar = []
+    for model in gemini_model_sirasi(api_anahtari):
         try:
-            j = _http("POST", f"{GEMINI_TABAN}/models/{model}:generateContent", govde=govde,
-                      basliklar={"x-goog-api-key": api_anahtari}, zaman_asimi=90)
+            j = gemini_istegi(model, govde, api_anahtari)
             metin = "".join(p.get("text", "") for p in j["candidates"][0]["content"]["parts"])
             metin = re.sub(r"^```(?:json)?|```$", "", metin.strip()).strip()
             sonuc = json.loads(metin)
             sonuc["model"] = model
             return fis_sonucunu_duzenle(sonuc, kategoriler, eslemeler or {})
         except ApiHatasi as e:
-            son_hata = f"{model}: {e.mesaj}"
+            hatalar.append((model, e))
             if e.durum in (401, 403) or "API key not valid" in e.mesaj:
                 raise ApiHatasi(e.durum, "Gemini API anahtarı geçersiz.") from None
         except Exception as e:
-            son_hata = f"{model}: {e}"
-    raise ApiHatasi(500, f"Fiş analiz edilemedi ({son_hata})")
+            hatalar.append((model, e))
+    raise gemini_hata_mesaji(hatalar, "Fiş analiz edilemedi")
 
 
 def fis_sonucunu_duzenle(sonuc: dict, kategoriler: list[str], eslemeler: dict[str, str]) -> dict:
@@ -773,3 +813,136 @@ def donem_ozeti(islemler: list[dict], kisi_id: str | None = None) -> dict:
     return {"gelir": round(gelir, 2), "gider": round(gider, 2), "net": round(gelir - gider, 2),
             "aktarim_giris": round(aktarim_giris, 2), "aktarim_cikis": round(aktarim_cikis, 2),
             "kategoriler": dict(sorted(kategoriler.items(), key=lambda kv: -kv[1]))}
+
+
+# ---------------------------------------------------------------- miktar × birim fiyat = toplam
+def miktar_coz(metin) -> float | None:
+    """Miktar sayısı: '1,5' / '1.5' / '0,250' / '1.250' (= 1,25) / '2' -> float (4 basamağa kadar, yuvarlamadan)."""
+    if metin is None:
+        return None
+    if isinstance(metin, (int, float)):
+        return float(metin) if metin > 0 else None
+    s = re.sub(r"[^\d,.]", "", str(metin))
+    if not s or not re.search(r"\d", s):
+        return None
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif s.count(".") > 1:
+        bas, son = s.rsplit(".", 1)
+        s = bas.replace(".", "") + "." + son
+    try:
+        v = round(float(s), 4)
+    except ValueError:
+        return None
+    return v if v > 0 else None
+
+
+def miktar_yaz(x) -> str:
+    """1.25 -> '1,25'; 2.0 -> '2'; 0.3333 -> '0,333'"""
+    if x is None:
+        return ""
+    s = f"{float(x):.3f}".rstrip("0").rstrip(".")
+    return s.replace(".", ",")
+
+
+def para_yaz(x) -> str:
+    """TextField için: 1250.5 -> '1250,50'"""
+    return "" if x is None else f"{float(x):.2f}".replace(".", ",")
+
+
+class UcluHesap:
+    """Miktar (m) × birim fiyat (b) = toplam (t). Kullanıcı ikisini girince üçüncüsünü hesaplar.
+    Kurallar:
+      • Miktar kullanıcı tarafından girildiyse 'sabit'tir: birim fiyat ile toplamdan en son DOKUNULMAYAN hesaplanır
+        (2 kg × 50 → 100; toplamı 98,50 yaparsanız birim fiyat 49,25 olur, miktar değişmez).
+      • Miktar girilmemişse ve birim fiyat + toplam varsa miktar hesaplanır (100 ₺ / 40 ₺ = 2,5).
+      • Hesaplanan alanı kullanıcı elle değiştirirse o alan kaynak olur, hesap diğerine geçer.
+      • Bir kaynak silinirse ona bağlı hesaplanan değer de temizlenir; silinen alan hemen geri doldurulmaz.
+    duzenle() hesaplanan alan(lar)ın yeni değerini döndürür: {'b': 49.25} ya da {'t': None} (temizle)."""
+
+    ALANLAR = ("m", "b", "t")
+
+    def __init__(self, m=None, b=None, t=None):
+        self.deger = {"m": self._gecerli(m), "b": self._gecerli(b), "t": self._gecerli(t)}
+        self.zaman = {}
+        self._sayac = 0
+        self.oto = None
+        d = self.deger
+        # başlangıç: mevcut kayıt düzenleniyorsa miktar ve toplam kaynak, birim fiyat onlardan
+        sira = [k for k in ("m", "t", "b") if d[k] is not None]
+        if d["m"] is not None and d["t"] is not None:
+            sira = ["m", "t"]
+        for k in sira[:2]:
+            self._dokun(k)
+        self.ilk_hesap = self._hesapla()
+
+    @staticmethod
+    def _gecerli(v):
+        try:
+            v = float(v) if v is not None and v != "" else None
+        except (TypeError, ValueError):
+            return None
+        return v if v and v > 0 else None
+
+    def _dokun(self, k):
+        self._sayac += 1
+        self.zaman[k] = self._sayac
+
+    def _kaynaklar(self):
+        return {k for k in self.zaman if self.deger.get(k) is not None}
+
+    def hedef(self):
+        u = self._kaynaklar()
+        if "m" in u:
+            if "b" in u and "t" in u:
+                return "b" if self.zaman["b"] < self.zaman["t"] else "t"
+            if "b" in u:
+                return "t"
+            if "t" in u:
+                return "b"
+            return None
+        return "m" if ("b" in u and "t" in u) else None
+
+    def _hesapla(self):
+        h = self.hedef()
+        if h is None:
+            return {}
+        m, b, t = self.deger["m"], self.deger["b"], self.deger["t"]
+        if h == "t":
+            v = round(m * b, 2)
+        elif h == "b":
+            v = round(t / m, 2) if m else None
+        else:
+            v = round(t / b, 3) if b else None
+        if not v or v <= 0:
+            return {}
+        self.deger[h] = v
+        self.zaman.pop(h, None)
+        self.oto = h
+        return {h: v}
+
+    def duzenle(self, k, v) -> dict:
+        """Kullanıcı k alanına v yazdı (None: sildi / geçersiz)."""
+        v = self._gecerli(v)
+        self.deger[k] = v
+        if v is None:
+            self.zaman.pop(k, None)
+            if self.oto == k:
+                self.oto = None
+                return {}
+            if self.oto is not None:  # hesaplanan değerin kaynağı gitti
+                o, self.oto = self.oto, None
+                self.deger[o] = None
+                return {o: None}
+            return {}
+        self._dokun(k)
+        if self.oto == k:
+            self.oto = None
+        return self._hesapla()
+
+    def birim_fiyat(self):
+        """Kayda yazılacak birim fiyat (miktar ve toplam varsa onlardan, tutarlı olsun diye)."""
+        m, b, t = self.deger["m"], self.deger["b"], self.deger["t"]
+        if self.oto == "b" or (b is None and m and t):
+            return round(t / m, 2) if m and t else b
+        return round(b, 2) if b else None

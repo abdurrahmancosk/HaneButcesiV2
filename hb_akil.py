@@ -48,18 +48,16 @@ def gemini(prompt: str, api_anahtari: str, gorsel: bytes | None = None, mime: st
     govde = {"contents": [{"parts": parcalar}], "generationConfig": ayar}
     if internet:
         govde["tools"] = [{"google_search": {}}]
-    son = "bilinmeyen hata"
-    for model in hb.gemini_modelleri(api_anahtari):
+    hatalar = []
+    for model in hb.gemini_model_sirasi(api_anahtari):
         try:
             g = _dusunmesiz(govde, model)
             try:
-                j = hb._http("POST", f"{hb.GEMINI_TABAN}/models/{model}:generateContent", govde=g,
-                             basliklar={"x-goog-api-key": api_anahtari}, zaman_asimi=90)
+                j = hb.gemini_istegi(model, g, api_anahtari)
             except hb.ApiHatasi as e:
                 if g is govde or e.durum != 400 or "think" not in e.mesaj.lower():
                     raise
-                j = hb._http("POST", f"{hb.GEMINI_TABAN}/models/{model}:generateContent", govde=govde,
-                             basliklar={"x-goog-api-key": api_anahtari}, zaman_asimi=90)
+                j = hb.gemini_istegi(model, govde, api_anahtari)
             metin = "".join(p.get("text", "") for p in j["candidates"][0]["content"]["parts"]).strip()
             if not json_mod:
                 return metin
@@ -69,12 +67,12 @@ def gemini(prompt: str, api_anahtari: str, gorsel: bytes | None = None, mime: st
                 metin = m.group(0) if m else metin
             return json.loads(metin)
         except hb.ApiHatasi as e:
-            son = f"{model}: {e.mesaj}"
+            hatalar.append((model, e))
             if e.durum in (401, 403) or "API key not valid" in e.mesaj:
                 raise hb.ApiHatasi(e.durum, "Gemini API anahtarı geçersiz.") from None
         except Exception as e:
-            son = f"{model}: {e}"
-    raise hb.ApiHatasi(500, f"Yapay zeka yanıt veremedi ({son})")
+            hatalar.append((model, e))
+    raise hb.gemini_hata_mesaji(hatalar, "Yapay zeka yanıt veremedi")
 
 
 # ----------------------------------------------------------------------------
@@ -102,7 +100,7 @@ def fatura_analiz_et(gorsel: bytes, mime: str, api_anahtari: str, turler: list[s
  "birim_fiyat": 2.85, "tutar": 977.00}}
 Kurallar: tutar ödenecek toplam tutardır (KDV dahil). tuketim faturadaki dönem tüketimidir (endeks farkı).
 birim_fiyat yoksa null bırak. Sayılar nokta ondalıklı sayı olsun."""
-    j = gemini(istem, api_anahtari, gorsel, mime)
+    j = gemini(istem, api_anahtari, gorsel, mime, sicaklik=0.1)
     tur = j.get("tur") if j.get("tur") in turler else "Diğer"
     tutar = hb.tutar_coz(j.get("tutar")) or 0
     tuketim = hb.tutar_coz(j.get("tuketim"))
@@ -240,7 +238,7 @@ def hizli_ekle_ses(ses: bytes, mime: str, kategoriler: list[str], gelir_turleri:
 YALNIZCA JSON: {{"metin": "duyduğun cümle", "kayitlar": [{{"tur": "Gider|Gelir", "tutar": 45.0, "firma": "", "urun": "",
 "miktar": "", "kategori": "listeden biri", "tarih": "GG.AA.YYYY SS:DD"}}]}}
 Bugün: {hb.simdi():%d.%m.%Y %A %H:%M}. Gider kategorileri: {json.dumps(kategoriler, ensure_ascii=False)}
-Gelir türleri: {json.dumps(gelir_turleri, ensure_ascii=False)}. Tutarı olmayan kalemi yazma.""", api_anahtari, ses, mime)
+Gelir türleri: {json.dumps(gelir_turleri, ensure_ascii=False)}. Tutarı olmayan kalemi yazma.""", api_anahtari, ses, mime, sicaklik=0.1)
     metin = (j.get("metin") or "").strip() if isinstance(j, dict) else ""
     sonuc = []
     for k in (j.get("kayitlar") if isinstance(j, dict) else []) or []:
@@ -258,7 +256,7 @@ Gelir türleri: {json.dumps(gelir_turleri, ensure_ascii=False)}. Tutarı olmayan
 
 def sesi_yaziya_dok(ses: bytes, mime: str, api_anahtari: str) -> str:
     return gemini("Bu Türkçe ses kaydında söyleneni noktalama ile aynen yazıya dök. Sadece metni yaz.", api_anahtari, ses,
-                  mime, json_mod=False).strip()
+                  mime, json_mod=False, sicaklik=0.1).strip()
 
 
 # ----------------------------------------------------------------------------

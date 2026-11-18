@@ -1077,10 +1077,13 @@ class EkOzellikler:
                              prefix_icon=ft.Icons.STOREFRONT_ROUNDED)
         tarih = ft.TextField(label="Ne zaman? (GG.AA.YYYY SS:DD)", dense=True, prefix_icon=ft.Icons.EVENT_ROUNDED,
                              value=(hb.tarih_goster(a["alinma"]) if a.get("alinma") else hb.simdi().strftime("%d.%m.%Y %H:%M")))
-        miktar_satir, miktar_oku = self.miktar_alani(a.get("alis_miktar") or a.get("miktar"), "Ne kadar?")
-        tutar = ft.TextField(label="Kaça? (₺)", dense=True, keyboard_type=ft.KeyboardType.NUMBER,
+        tutar = ft.TextField(label="Kaça? Toplam (₺)", dense=True, keyboard_type=ft.KeyboardType.NUMBER,
                              value=(f"{float(a['alis_tutar']):.2f}".replace(".", ",") if a.get("alis_tutar") not in (None, "") else ""),
                              prefix_icon=ft.Icons.PAYMENTS_ROUNDED)
+        miktar_satir, fiyat_oku = self.fiyat_alanlari(a.get("alis_miktar") or a.get("miktar"), None, tutar)
+
+        def miktar_oku():
+            return fiyat_oku()[0]
         harcama = ft.Checkbox(label="Harcama olarak da kaydet", value=not a.get("islem_id"))
         gizli = ft.Checkbox(label="Hatice'den gizle", value=bool(getattr(self, "gizli_varsayilan", False))) \
             if self.yonetici and len(self.profiller) > 1 else None
@@ -1108,6 +1111,7 @@ class EkOzellikler:
             if harcama.value and t:
                 kayit = {"tur": "Gider", "tarih": hb.iso_tarih(zaman), "firma": (firma.value or "").strip() or None,
                          "urun": a["urun"], "kategori": kategori_bul(a["urun"]), "miktar": miktar_oku(), "tutar": t,
+                         "birim_fiyat": fiyat_oku()[1],
                          "aciklama": "Alışveriş listesinden", "kasa_sahibi": self.ben["id"]}
                 if gizli is not None and gizli.value:
                     kayit["gizli"] = True
@@ -1135,7 +1139,7 @@ class EkOzellikler:
             self.ekrani_ciz(_koru=True)
 
         alanlar = [yazi("Fiş girmeden hızlıca: bilgiler listede görünür, tutar yazarsanız harcama olarak da eklenir.",
-                        11.5, renk=ui.SOLUK), firma, self.takvimli(tarih, saat=True), miktar_satir, tutar, harcama]
+                        11.5, renk=ui.SOLUK), firma, self.takvimli(tarih, saat=True), tutar, miktar_satir, harcama]
         if gizli is not None:
             alanlar.append(gizli)
         self._girdi_dialog(f"{a['urun']} – aldım", alanlar, kaydet, "Alındı")

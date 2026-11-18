@@ -14,7 +14,7 @@ import flet as ft
 import hb_akil as ak
 import hb_core as hb
 
-SURUM = "2.16.0"
+SURUM = "2.17.0"
 
 import hb_ui as ui
 from hb_ek import EkOzellikler
@@ -134,8 +134,9 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         except Exception:
             pass  # Hatice'de bulut ayarı yazılamaz; birim telefonunda kalır
 
-    def birim_secici(self, deger=None, etiket="Birim", **kw):
-        """Açılır birim listesi; en altta “+ Yeni birim…” ile listeye kalıcı birim eklenir."""
+    def birim_secici(self, deger=None, etiket="Birim", sonra=None, **kw):
+        """Açılır birim listesi; en altta “+ Yeni birim…” ile listeye kalıcı birim eklenir.
+        sonra: birim değişince çağrılır (birim fiyat etiketini güncellemek için)."""
         secenekler = self.birimler()
         if deger and deger not in secenekler:
             secenekler = secenekler + [deger]
@@ -143,6 +144,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
 
         def degisti(e):
             if dd.value != self.YENI_BIRIM:
+                if sonra:
+                    sonra()
                 return
             dd.value = None
             ad_tf = ft.TextField(label="Yeni birim (örn: koli, teneke)", autofocus=True)
@@ -159,6 +162,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                 except Exception:
                     self.guncelle()
                 self.bildir(f"“{ad}” birimi eklendi ✓", GELIR)
+                if sonra:
+                    sonra()
             self._girdi_dialog("Yeni birim", [ad_tf], kaydet, "Ekle")
         ui.degisince(dd, degisti)
         return dd
@@ -175,6 +180,98 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             b = birim.value if birim.value and birim.value != self.YENI_BIRIM else ""
             return f"{s} {b}".strip() if s else None
         return ft.Row([sayi, birim], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER), oku
+
+    def fiyat_alanlari(self, miktar_metni, birim_fiyat, tutar_tf, kompakt=False, guncelle=None):
+        """Miktar + birim + birim fiyat alanları; verilen toplam (tutar) alanıyla birlikte çalışır: iki alan
+        girilince üçüncüsü hesaplanır (hb.UcluHesap). -> (kontrol, oku) ; oku() -> (miktar_metni, birim_fiyat)"""
+        m = re.match(r"^\s*([\d.,]+)\s*(.*)$", str(miktar_metni or ""))
+        m_sayi = hb.miktar_coz(m.group(1)) if m else None
+        birim_adi = (m.group(2).strip() if m else "") or None
+        if birim_adi:
+            birim_adi = next((b for b in self.birimler() if b.lower() == birim_adi.lower()), birim_adi.lower())
+        hesap = hb.UcluHesap(m_sayi, birim_fiyat, hb.tutar_coz(tutar_tf.value))
+        guncelle = guncelle or self.guncelle
+
+        miktar_tf = ft.TextField(label="Miktar", value=hb.miktar_yaz(m_sayi) if m_sayi else
+                                 (m.group(1) if m else (miktar_metni or "")), dense=True,
+                                 keyboard_type=ft.KeyboardType.NUMBER,
+                                 **({"width": 84} if kompakt else {"expand": True, "prefix_icon": ft.Icons.SCALE_ROUNDED}))
+        bf_tf = ft.TextField(label="Birim fiyat", value=hb.para_yaz(hesap.deger["b"]), dense=True,
+                             keyboard_type=ft.KeyboardType.NUMBER,
+                             **({"expand": True} if kompakt else {"expand": True, "prefix_icon": ft.Icons.SELL_ROUNDED}))
+        formul = yazi("", 11.5 if not kompakt else 10.5, renk=ui.SOLUK)
+        alan = {"m": miktar_tf, "b": bf_tf, "t": tutar_tf}
+        birim_dd = None
+
+        def birim():
+            v = birim_dd.value if birim_dd is not None else None
+            return v if v and v != self.YENI_BIRIM else (birim_adi or "birim")
+
+        def gorunum():
+            bf_tf.label = f"Birim fiyat (₺/{birim()})"
+            for k, tf in alan.items():
+                oto = hesap.oto == k
+                if k != "t":
+                    tf.helper_text = "🧮 otomatik" if oto else None
+                tf.color = "#0891b2" if oto and k != "t" else None
+            d = hesap.deger
+            if d["m"] and d["b"] and d["t"]:
+                parcalar = [f"{hb.miktar_yaz(d['m'])} {birim()}", f"{hb.tl(d['b'])}", f"{hb.tl(d['t'])}"]
+                isaret = {"m": 0, "b": 1, "t": 2}.get(hesap.oto)
+                if isaret is not None:
+                    parcalar[isaret] = f"[{parcalar[isaret]}]"
+                formul.value = f"{parcalar[0]} × {parcalar[1]} = {parcalar[2]}" + ("  ([ ] hesaplandı)" if not kompakt
+                                                                                    and isaret is not None else "")
+            elif d["t"] and not d["m"]:
+                formul.value = "" if kompakt else "Miktarı da yazarsanız birim fiyat hesaplanır."
+            elif d["m"] and not d["t"] and not d["b"]:
+                formul.value = "" if kompakt else "Birim fiyatı ya da toplamı yazın; diğeri hesaplanır."
+            else:
+                formul.value = ""
+            formul.visible = bool(formul.value)
+
+        def uygula(sonuc):
+            for k, v in sonuc.items():
+                alan[k].value = "" if v is None else (hb.miktar_yaz(v) if k == "m" else hb.para_yaz(v))
+
+        t_eski = tutar_tf.on_change  # örn. fişte genel toplamı yeniden hesaplayan dinleyici
+
+        def baglan(k, tf):
+            def degisti(e):
+                deger = hb.miktar_coz(tf.value) if k == "m" else hb.tutar_coz(tf.value)
+                sonuc = hesap.duzenle(k, deger)
+                uygula(sonuc)
+                gorunum()
+                if t_eski and (k == "t" or "t" in sonuc):
+                    try:
+                        t_eski(None)
+                    except TypeError:
+                        t_eski(e)
+                guncelle()
+            tf.on_change = degisti
+
+        birim_dd = self.birim_secici(birim_adi or ("adet" if (m_sayi or not miktar_metni) else None), "Birim",
+                                     sonra=lambda: (gorunum(), guncelle()),
+                                     **({"width": 104} if kompakt else {"width": 130}))
+        for k, tf in alan.items():
+            baglan(k, tf)
+        uygula(hesap.ilk_hesap)
+        gorunum()
+
+        def oku():
+            mm = hesap.deger["m"]
+            mt = f"{hb.miktar_yaz(mm)} {birim() if birim() != 'birim' else ''}".strip() if mm else \
+                ((miktar_tf.value or "").strip() or None)
+            return mt, hesap.birim_fiyat()
+
+        if kompakt:
+            kontrol = ft.Column([ft.Row([miktar_tf, birim_dd, bf_tf], spacing=6,
+                                        vertical_alignment=ft.CrossAxisAlignment.START), formul], spacing=2)
+        else:
+            kontrol = ft.Column([ft.Row([miktar_tf, birim_dd], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
+                                 bf_tf, formul], spacing=8)
+        kontrol._hesap = hesap
+        return kontrol, oku
 
     # ------------------------------------------------------------------ takvim / saat seçici
     def _secici_ac(self, p, yontem):
@@ -369,9 +466,10 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
 
     # ------------------------------------------------------------ başlangıç
     async def baslat(self):
-        self.govde.content = ft.Column([ft.ProgressRing(), yazi("Yükleniyor...", renk=ui.SOLUK)],
-                                       horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                                       alignment=ft.MainAxisAlignment.CENTER, expand=True)
+        yukleme_kolonu = ft.Column([ft.ProgressRing(), yazi("Yükleniyor...", renk=ui.SOLUK)],
+                                   horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                   alignment=ft.MainAxisAlignment.CENTER, spacing=12)
+        self.govde.content = ft.Container(content=yukleme_kolonu, alignment=ui.ORTA, expand=True)
         self.guncelle()
         if await self.arka(self.supa.kayitli_oturumu_ac):
             try:
@@ -1392,7 +1490,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             satirlar += [("Kasa", self.ad(i.get("kasa_sahibi"))), ("Kategori", i.get("kategori")),
                          ("Firma", i.get("firma")), ("Ürün / Açıklama", i.get("urun")), ("Miktar", i.get("miktar"))]
             if i.get("birim_fiyat"):
-                satirlar.append(("Birim fiyat", hb.tl(i.get("birim_fiyat"))))
+                bm = re.match(r"^\s*[\d.,]+\s*(.+)$", str(i.get("miktar") or ""))
+                satirlar.append(("Birim fiyat", hb.tl(i.get("birim_fiyat")) + (f" / {bm.group(1).strip()}" if bm else "")))
         if self.yonetici and self.uyeler():
             satirlar.append(("Görünürlük", "🔒 Hatice'den gizli" if i.get("gizli") else "Hatice görebilir"
                              if self.uyeye_acik(i) else "Hatice görmez (gelir)"))
@@ -1523,7 +1622,10 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                              value=d.get("firma") or "", dense=True, prefix_icon=ft.Icons.STOREFRONT_ROUNDED)
         urun = ft.TextField(label="Ürün / Hizmet" if tur == "Gider" else "Açıklama", value=d.get("urun") or "",
                             dense=True, prefix_icon=ft.Icons.SHOPPING_BASKET_ROUNDED)
-        miktar, miktar_oku = self.miktar_alani(d.get("miktar"), "Miktar (isteğe bağlı)")
+        if tur == "Gider":  # miktar × birim fiyat = tutar: ikisi girilince üçüncüsü hesaplanır
+            miktar, fiyat_oku = self.fiyat_alanlari(d.get("miktar"), d.get("birim_fiyat"), tutar)
+        else:
+            miktar, fiyat_oku = None, (lambda: (None, None))
 
         secim = {"kategori": d.get("kategori") if d.get("tur") == tur and d.get("kategori") else
                  ("Market & Temel Gıda" if tur == "Gider" else self.gelir_turleri[0]),
@@ -1584,11 +1686,11 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                     self.guncelle()
                     return
                 kayit.update({"hedef_kasa": hedef, "kategori": "Transfer / Birikim",
-                              "firma": None, "urun": None, "miktar": None})
+                              "firma": None, "urun": None, "miktar": None, "birim_fiyat": None})
             else:
+                mik, bf = fiyat_oku()
                 kayit.update({"hedef_kasa": None, "kategori": secim["kategori"], "firma": firma.value.strip() or None,
-                              "urun": urun.value.strip() or None,
-                              "miktar": miktar_oku() if tur == "Gider" else None})
+                              "urun": urun.value.strip() or None, "miktar": mik, "birim_fiyat": bf})
             kaydet_btn.disabled = True
             self.guncelle()
             try:
@@ -1629,7 +1731,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             alanlar += [yazi("Kategori" if tur == "Gider" else "Gelir türü", 12, renk=ui.SOLUK), kat_kutusu,
                         ft.Container(height=4), firma, urun]
             if tur == "Gider":
-                alanlar.append(miktar)
+                alanlar += [yazi("Miktar × birim fiyat = tutar (ikisini yazın, üçüncüsü hesaplanır)", 12,
+                                 renk=ui.SOLUK), miktar]
             if self.yonetici:
                 alanlar += [yazi("Hangi kasa?", 12, renk=ui.SOLUK), kasa_kutusu]
             alanlar += [self.takvimli(tarih, saat=True), aciklama]
@@ -1753,7 +1856,12 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             hazir, mime = await self.arka(hb.gorseli_hazirla, veri)
             uzanti = "pdf" if mime == "application/pdf" else ("png" if mime == "image/png" else "jpg")
 
-        self.fis["mesaj"] = "Yükleniyor ve yapay zeka ile okunuyor..."
+        await self._fis_oku(hazir, mime, uzanti)
+
+    async def _fis_oku(self, hazir, mime, uzanti, yol=None):
+        """Görseli yükler (yol verilmediyse) ve yapay zekayla okur; okuma başarısızsa «Tekrar oku» için saklar."""
+        self.fis = {"durum": "isleniyor", "mesaj": "Yükleniyor ve yapay zeka ile okunuyor..." if yol is None
+                    else "Yapay zeka ile yeniden okunuyor..."}
         self.ekrani_ciz()
         if self.eslemeler is None:
             try:
@@ -1762,6 +1870,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                 self.eslemeler = {}
 
         async def yukle():
+            if yol is not None:
+                return yol
             return await self.arka(self.supa.fis_yukle, hazir, uzanti, mime)
 
         async def analiz():
@@ -1773,9 +1883,12 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         if isinstance(yol_s, Exception):
             uyari.append(f"Görsel yüklenemedi: {yol_s}")
             yol_s = None
+        tekrar = None
         if isinstance(analiz_s, Exception):
-            uyari.append(f"Otomatik okuma başarısız: {analiz_s}. Ürünleri elle girebilirsiniz.")
+            msj = getattr(analiz_s, "mesaj", None) or str(analiz_s)
+            uyari.append(f"Otomatik okuma başarısız: {msj}" + ("" if "elle" in msj else " Ürünleri elle girebilirsiniz."))
             analiz_s = {"firma": "", "tarih_dt": hb.simdi(), "urunler": [], "toplam_tutar": None}
+            tekrar = (hazir, mime, uzanti)
         urunler = analiz_s.get("urunler") or [{"urun": "", "miktar": "", "birim_fiyat": None, "tutar": None,
                                                "kategori": "Market & Temel Gıda"}]
         for u in urunler:
@@ -1790,7 +1903,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
         self.fis = {"durum": "duzenle", "yol": yol_s, "firma": analiz_s.get("firma") or "", "mukerrer": mukerrer,
                     "tarih": analiz_s["tarih_dt"].strftime("%d.%m.%Y %H:%M"),
                     "toplam": analiz_s.get("toplam_tutar"), "model": analiz_s.get("model"),
-                    "urunler": urunler, "uyari": uyari, "kasa": self.ben["id"]}
+                    "urunler": urunler, "uyari": uyari, "kasa": self.ben["id"], "tekrar": tekrar}
         self.ekrani_ciz()
         if not uyari:
             self.bildir(f"{len(urunler)} ürün okundu ✓", GELIR)
@@ -1820,7 +1933,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                                     on_change=toplami_hesapla)
             kat_dd = acilir("Kategori", self.kategoriler,
                             u.get("kategori") if u.get("kategori") in self.kategoriler else "Diğer", expand=True)
-            kayit = [urun_tf, tutar_tf, kat_dd, u.get("miktar"), u.get("birim_fiyat"), u.get("ai_kategori")]
+            fiyat, fiyat_oku = self.fiyat_alanlari(u.get("miktar"), u.get("birim_fiyat"), tutar_tf, kompakt=True)
+            kayit = [urun_tf, tutar_tf, kat_dd, fiyat_oku, None, u.get("ai_kategori")]
             kutu = kart(None, dolgu=8, renk=ui.ZEMIN2)
 
             def kaldir(e):
@@ -1833,7 +1947,7 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                 ft.Row([ft.Container(content=urun_tf, expand=True),
                         ft.IconButton(icon=ft.Icons.CLOSE, icon_size=18, on_click=kaldir, tooltip="Satırı sil")]),
                 ft.Row([tutar_tf, kat_dd], spacing=8),
-                *([yazi(f"Miktar: {u['miktar']}", 11, renk=ui.SOLUK)] if u.get("miktar") else []),
+                fiyat,
                 *([ft.Row([ft.Icon(ft.Icons.PRICE_CHECK_ROUNDED, size=14, color="#0891b2"), yazi(fo, 11, renk="#0891b2", expand=True)],
                           spacing=4)] if (fo := (ak.fiyat_ozeti(self.fiyat_verisi, u.get("urun") or "", u.get("birim_fiyat") or u.get("tutar"))
                                                  if self.fiyat_verisi and u.get("urun") else None)) else []),
@@ -1863,7 +1977,8 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             grup = str(uuid.uuid4())
             zaman = hb.iso_tarih(hb.tarih_coz(tarih.value))
             sahip = kasa.value if self.yonetici else self.ben["id"]
-            for urun_tf, tutar_tf, kat_dd, mik, birim, ai_kat in satirlar:
+            for urun_tf, tutar_tf, kat_dd, fiyat_oku, _, ai_kat in satirlar:
+                mik, birim = fiyat_oku()
                 t = hb.tutar_coz(tutar_tf.value)
                 if not t or t <= 0:
                     continue
@@ -1928,6 +2043,10 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
                 border=ft.Border.all(1, GIDER) if hasattr(ft, "Border") and hasattr(ft.Border, "all") else ft.border.all(1, GIDER)))
         for u in f.get("uyari") or []:
             bilgi.append(kart(yazi("⚠️ " + u, 12, renk=GIDER), renk=ui.UYARI_ZEMIN, dolgu=10))
+        if f.get("tekrar"):
+            h, mi, uz = f["tekrar"]
+            bilgi.append(buton("Tekrar oku", lambda e: self.page.run_task(self._fis_oku, h, mi, uz, f.get("yol")),
+                               ft.Icons.REFRESH_ROUNDED, tip="tonal"))
         alt_bilgi = " • ".join(x for x in [f"Model: {f['model']}" if f.get("model") else "",
                                             f"Fiş toplamı: {hb.tl(f['toplam'])}" if f.get("toplam") else ""] if x)
         ust_kontroller = [ft.Row([yazi("Fişi kontrol et", 20, True, expand=True),
