@@ -39,9 +39,8 @@ MENU = [  # anahtar, başlık, açıklama, simge, renk
     ("varliklar", "Altın & döviz", "Elinizdeki altın/döviz, güncel değeri", "DIAMOND_ROUNDED", "#ca8a04"),
     ("yil_ozeti", "Yıl özeti", "Yılın hikayesi: en çok, en büyük, en tasarruflu", "CELEBRATION_ROUNDED", "#0d9488"),
     ("kasa", "Kasa hareketleri", "Gelirler, aktarımlar, tüm geçmiş", "ACCOUNT_BALANCE_WALLET_ROUNDED", "#0f766e"),
-    ("rapor", "Akıllı rapor", "Dönem karşılaştırma, Excel / PDF", "INSIGHTS_ROUNDED", "#7c3aed"),
-    ("asistan", "Asistana sor", "“Bu ay sigaraya ne verdik?”", "AUTO_AWESOME_ROUNDED", "#a855f7"),
-    ("ayarlar", "Ayarlar", "Tema, PIN, şifre, yapay zeka", "SETTINGS_ROUNDED", "#475569"),
+    (“rapor”, “Akıllı rapor”, “Dönem karşılaştırma, Excel / PDF”, “INSIGHTS_ROUNDED”, “#7c3aed”),
+    (“ayarlar”, “Ayarlar”, “Tema, PIN, şifre, yapay zeka”, “SETTINGS_ROUNDED”, “#475569”),
 ]
 
 
