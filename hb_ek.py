@@ -24,7 +24,24 @@ FATURA_SIMGE = {"Elektrik": ("BOLT", "#f59e0b"), "Su": ("WATER_DROP", "#0ea5e9")
                 "Kira": ("HOME", "#0f766e"), "Kredi kartı": ("CREDIT_CARD", "#4f46e5"), "Sigorta": ("SHIELD", "#0891b2"),
                 "Diğer": ("RECEIPT_LONG", "#64748b")}
 
-MENU = []  # Menu itemleri asistan kaldirildi - bosu liste
+MENU = [
+    ("bildirimler", "Bildirimler", "Esinizin ekledigi kayitlar, hatirlatmalar", "NOTIFICATIONS_ROUNDED", "#e11d48"),
+    ("faturalar", "Faturalar", "Yukle, hatirla, zam analizi", "RECEIPT_LONG_ROUNDED", "#f59e0b"),
+    ("alisveris", "Alisveris listesi", "Ortak, anlik liste", "CHECKLIST_ROUNDED", "#16a34a"),
+    ("butceler", "Butce limitleri", "Kategori sinirlari ve uyarilar", "DONUT_LARGE_ROUNDED", "#e11d48"),
+    ("hedefler", "Birikim hedefleri", "Tatil, araba, acil durum", "SAVINGS_ROUNDED", "#ca8a04"),
+    ("borclar", "Borc alacak", "Kime ne verildi, kimden ne alinacak", "HANDSHAKE_ROUNDED", "#2563eb"),
+    ("taksitler", "Kredi karti", "Ekstre, aylik odeme, gelecek aylar", "CREDIT_CARD_ROUNDED", "#4f46e5"),
+    ("abonelikler", "Abonelikler", "Su, dogalgaz, internet e-postadan otomatik", "MARK_EMAIL_READ_ROUNDED", "#ea4335"),
+    ("aliskanlik", "Akilli butce", "Ne siklikla ne aliyoruz, gidis, oneriler", "INSIGHTS_ROUNDED", "#7c3aed"),
+    ("sohbet", "Hane sohbeti", "Mesaj, para isteği, kayda yorum", "FORUM_ROUNDED", "#0d9488"),
+    ("fiyatlar", "Fiyat takibi", "Urun fiyatlari, guncel market fiyatlari", "PRICE_CHECK_ROUNDED", "#0891b2"),
+    ("varliklar", "Altin doviz", "Elinizdeki altin doviz, guncel degeri", "DIAMOND_ROUNDED", "#ca8a04"),
+    ("yil_ozeti", "Yil ozeti", "Yilin hikayesi: en cok, en buyuk, en tasarruflu", "CELEBRATION_ROUNDED", "#0d9488"),
+    ("kasa", "Kasa hareketleri", "Gelirler, aktarimlar, tum gecmis", "ACCOUNT_BALANCE_WALLET_ROUNDED", "#0f766e"),
+    ("rapor", "Akilli rapor", "Donem karsilastirma, Excel PDF", "INSIGHTS_ROUNDED", "#7c3aed"),
+    ("ayarlar", "Ayarlar", "Tema, PIN, sifre, yapay zeka", "SETTINGS_ROUNDED", "#475569"),
+]
 
 
 _UZERI_CIZILI = getattr(getattr(ft, "TextDecoration", None), "LINE_THROUGH", None)
