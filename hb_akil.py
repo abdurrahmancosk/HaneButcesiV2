@@ -333,22 +333,25 @@ def _birim_fiyat(k: dict) -> float:
     return float(k.get("tutar") or 0)
 
 
-def fiyat_gecmisi(gecmis: list[dict], urun: str, esik: float = 0.72, en_fazla: int = 30) -> list[dict]:
+def fiyat_gecmisi(gecmis: list[dict], urun: str, esik: float = 0.55, en_fazla: int = 30) -> list[dict]:
+    """Ürün geçmişi: benzer ürünleri (farklı gramaj, markalar) birleştirir.
+    esik: 0.55 ile "Kaşar 1kg" ve "Kaşar 500gr" eşleşir; "Kaşar" ve "Peynir" eşleşmez."""
     eslesen = [dict(k, benzerlik=_benzerlik(urun, k.get("urun") or "")) for k in gecmis]
     eslesen = [k for k in eslesen if k["benzerlik"] >= esik]
-    eslesen.sort(key=lambda k: str(k.get("tarih") or ""), reverse=True)
+    # Tarihe göre sırala (en eski en sonda)
+    eslesen.sort(key=lambda k: hb.tarih_yerel(k.get("tarih") or hb.simdi()).timestamp())
     return eslesen[:en_fazla]
 
 
 def fiyat_ozeti(gecmis: list[dict], urun: str, simdiki_fiyat: float | None = None, haric_bugun=True) -> str | None:
     """Fiş düzenleyicide ürün altına yazılacak tek satırlık kıyas."""
-    kayitlar = fiyat_gecmisi(gecmis, urun, esik=0.8, en_fazla=40)
+    kayitlar = fiyat_gecmisi(gecmis, urun, esik=0.55, en_fazla=40)
     if haric_bugun:
         bugun = hb.simdi().date()
         kayitlar = [k for k in kayitlar if hb.tarih_yerel(k.get("tarih")).date() != bugun]
     if not kayitlar:
         return None
-    son = kayitlar[0]
+    son = kayitlar[-1]  # en yeni tarih (sıralama ascending olduğu için son eleman)
     en_ucuz = min(kayitlar, key=_birim_fiyat)
     parca = [f"Son: {son.get('firma') or '?'} {hb.tl(_birim_fiyat(son))} ({hb.tarih_yerel(son.get('tarih')):%d.%m})"]
     if en_ucuz is not son:
@@ -361,20 +364,45 @@ def fiyat_ozeti(gecmis: list[dict], urun: str, simdiki_fiyat: float | None = Non
 
 
 def fiyat_listesi(gecmis: list[dict], arama: str = "", en_fazla: int = 60) -> list[dict]:
-    """Ürün bazında özet: son fiyat, en ucuz market, kaç kez alındı."""
+    """Ürün bazında özet: benzer ürünleri (Kaşar 1kg, 500gr) birleştirir.
+    Son fiyat, en ucuz market, ilk/son tarih, adet, tüketim hızı."""
+    # Arama varsa ön filtre
+    if arama:
+        arama_anahtar = hb.urun_anahtari(arama)
+        gecmis = [k for k in gecmis if _benzerlik(k.get("urun") or "", arama) >= 0.4]
+
+    # Benzerlik ile gruplandır (aynı ürün varyasyonları)
     gruplar: dict[str, list[dict]] = {}
     for k in gecmis:
-        anahtar = hb.urun_anahtari(k.get("urun"))
-        if not anahtar or (arama and hb.urun_anahtari(arama) not in anahtar):
+        urun = k.get("urun") or ""
+        if not urun:
             continue
-        gruplar.setdefault(anahtar, []).append(k)
+        # Benzer bir grubu bul (esik=0.55: "Kaşar 1kg" ile "Kaşar 500gr" eşleşir)
+        grup_anahtari = None
+        for mevcut in gruplar:
+            if _benzerlik(mevcut, urun) >= 0.55:
+                grup_anahtari = mevcut
+                break
+        if not grup_anahtari:
+            grup_anahtari = urun
+        gruplar.setdefault(grup_anahtari, []).append(k)
     sonuc = []
     for anahtar, ks in gruplar.items():
         ks.sort(key=lambda k: str(k.get("tarih") or ""), reverse=True)
         son, ucuz = ks[0], min(ks, key=_birim_fiyat)
         ilk = ks[-1]
-        sonuc.append({"urun": son.get("urun"), "adet": len(ks), "son_fiyat": _birim_fiyat(son), "son_firma": son.get("firma"),
-                      "son_tarih": son.get("tarih"), "en_ucuz": _birim_fiyat(ucuz), "en_ucuz_firma": ucuz.get("firma"),
+
+        # Tüketim hızı hesapla (kaç günde bir alan / toplam miktar)
+        ilk_tarih = hb.tarih_yerel(ilk.get("tarih")) if ilk.get("tarih") else hb.simdi()
+        son_tarih = hb.tarih_yerel(son.get("tarih")) if son.get("tarih") else hb.simdi()
+        gun_farki = max((son_tarih - ilk_tarih).days, 1)
+        adet = len(ks)
+        tüketim_hizi = gun_farki / adet if adet > 1 else gun_farki
+
+        sonuc.append({"urun": son.get("urun"), "adet": adet, "son_fiyat": _birim_fiyat(son), "son_firma": son.get("firma"),
+                      "son_tarih": son.get("tarih"), "ilk_tarih": ilk.get("tarih"), "gun_farki": gun_farki,
+                      "tuketim_hizi": tüketim_hizi, "aciklama": f"{adet}x alındı, {gun_farki} gün / {tüketim_hizi:.1f} gün arası",
+                      "en_ucuz": _birim_fiyat(ucuz), "en_ucuz_firma": ucuz.get("firma"),
                       "degisim": _yuzde(_birim_fiyat(son), _birim_fiyat(ilk)) if len(ks) > 1 else None, "kayitlar": ks})
     sonuc.sort(key=lambda x: (-x["adet"], str(x["urun"])))
     return sonuc[:en_fazla]
