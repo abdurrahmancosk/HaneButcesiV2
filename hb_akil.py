@@ -1703,6 +1703,8 @@ def ek_ders_tahmini(ayar: dict | None, yil: int, ay: int, tatiller=None, pansiyo
     brut_saat = float(a["brut"] or ek_ders_brut(yil, ay))
     gv_or, dv_or = float(a["gv_orani"]) / 100, float(a["dv_orani"]) / 100
     gv_ist, dv_ist = float(a.get("gv_istisna") or 0), float(a.get("dv_istisna") or 0)
+    if ay == 12:  # Aralık: Gelir Vergisi istisnaları yıl içinde tükenmiş
+        gv_ist = 0.0
 
     def hesap(sa):
         b = round(sa * brut_saat, 2)
