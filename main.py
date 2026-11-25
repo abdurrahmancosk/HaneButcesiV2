@@ -2198,10 +2198,22 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             self.ek_varsayilan()
             self.giris_ekrani()
 
+        async def guncelleme_kontrol_et(e):
+            self.bildir("🔄 GitHub'ta yeni sürüm kontrol ediliyor…")
+            try:
+                guncelleme = await self.arka(hb.guncelleme_kontrol_et, SURUM)
+                if guncelleme:
+                    self.bildir(f"🎉 Yeni sürüm bulundu: {guncelleme['tag']} | Güncelleme başlıyor…", GELIR)
+                else:
+                    self.bildir(f"✓ Son sürümü kullanıyorsunuz ({SURUM})", GELIR)
+            except Exception as ex:
+                self.bildir(f"Kontrol yapılamadı: {ex}", GIDER)
+
         kontroller.insert(1, self.tema_pin_karti())
         if self.yonetici:
             kontroller.insert(2, self.push_ayar_karti())
         kontroller += [buton("Verileri yenile", yenile, ft.Icons.REFRESH, tip="outlined"),
+                       buton("Güncellemeyi kontrol et", guncelleme_kontrol_et, ft.Icons.SYSTEM_UPDATE_ROUNDED, tip="outlined"),
                        buton("Çıkış yap", cikis, ft.Icons.LOGOUT, tip="outlined"),
                        ft.Row([yazi(f"Hane Bütçesi {SURUM}", 11, renk=ui.SOLUK)], alignment=ft.MainAxisAlignment.CENTER)]
         return ft.ListView(padding=14, spacing=12, expand=True, controls=kontroller)
