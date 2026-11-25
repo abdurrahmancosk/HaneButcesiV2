@@ -1651,7 +1651,10 @@ EK_DERS_PANSIYON_EN_FAZLA = 8
 
 
 def ek_ders_haftalari(yil: int, ay: int) -> tuple[dt.date, dt.date]:
-    """Hafta bütünlüğü: perşembesi bu ayda olan haftalar bu aya sayılır (Ekim 2026 = 28 Eylül – 1 Kasım)."""
+    """Hafta bütünlüğü: perşembesi bu ayda olan haftalar bu aya sayılır (Ekim 2026 = 28 Eylül – 1 Kasım).
+    Aralık: 30 Kasım – 31 Aralık (uç tarihler dahil)."""
+    if ay == 12:  # Aralık
+        return dt.date(yil, 11, 30), dt.date(yil, 12, 31)
     ilk = dt.date(yil, ay, 1)
     pers = ilk + dt.timedelta(days=(3 - ilk.weekday()) % 7)          # ayın ilk perşembesi
     bas = pers - dt.timedelta(days=3)                                # o haftanın pazartesi
@@ -1710,13 +1713,18 @@ def ek_ders_tahmini(ayar: dict | None, yil: int, ay: int, tatiller=None, pansiyo
     brut, gv, dv, net = hesap(saat)
     pansiyonsuz = hesap(saat - saat_pansiyon)[3]
     tek = hesap(saat - saat_pansiyon + float(a["pansiyon_saat"]))[3] - pansiyonsuz
-    oy, oa = (yil + 1, 1) if ay == 12 else (yil, ay + 1)
+    if ay == 12:  # Aralık: ödeme yeni yıldan önce (25-31 Aralık)
+        oy, oa = yil, 12
+        odeme_bas, odeme_bit = 25, 31
+    else:
+        oy, oa = yil, ay + 1
+        odeme_bas, odeme_bit = int(a["odeme_bas"]), int(a["odeme_bit"])
     return {"yil": yil, "ay": ay, "bas": bas, "bit": bit, "hafta": ((bit - bas).days + 1) // 7,
             "okul_gunu": okul, "ara_tatil_gunu": ara, "haftalik": sum(program.values()),
             "saat_ders": round(saat_ders, 1), "saat_ara": saat_ara, "pansiyon": pansiyon, "saat_pansiyon": saat_pansiyon,
             "saat_diger": saat_diger, "saat": saat, "puantaj": pu, "brut_saat": brut_saat, "brut": brut, "gv": gv, "dv": dv, "net": net,
             "pansiyon_net": round(tek, 2),
-            "odeme_bas": dt.date(oy, oa, int(a["odeme_bas"])), "odeme_bit": dt.date(oy, oa, int(a["odeme_bit"]))}
+            "odeme_bas": dt.date(oy, oa, odeme_bas), "odeme_bit": dt.date(oy, oa, odeme_bit)}
 
 
 def ek_ders_yatan(islemler: list[dict], tahmin: dict) -> float | None:
