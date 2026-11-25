@@ -620,6 +620,16 @@ class Uygulama(EkOzellikler, EkOzellikler2, EkOzellikler3, EkOzellikler4):
             self.supa.cikis()
             self.giris_ekrani("Profil bulunamadı. Supabase'de 'supabase_kurulum.sql' betiğini çalıştırın.")
             return
+        if self.ben.get("ad", "").lower() == "hatice":
+            ozel_kolonu = ft.Column([
+                ft.ProgressRing(),
+                yazi("Seni Çok Seviyorum Haticem...", renk=ui.SOLUK),
+                ft.Icon(ft.Icons.FAVORITE_ROUNDED, color=GIDER, size=32)
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+               alignment=ft.MainAxisAlignment.CENTER, spacing=12)
+            self.govde.content = ft.Container(content=ozel_kolonu, alignment=ui.ORTA, expand=True)
+            self.guncelle()
+            await asyncio.sleep(2)
         self.yonetici = self.ben.get("rol") == "yonetici"
         await self.ayarlari_yukle()
 
